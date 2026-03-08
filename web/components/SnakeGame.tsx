@@ -25,6 +25,10 @@ export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) 
         scene.onCashout = onCashout;
         scene.onStatsUpdate = setStats;
 
+        // Set room directly on the instance BEFORE Phaser boots
+        (scene as any).room = room;
+        (scene as any).mySessionId = room.sessionId;
+
         const config: Phaser.Types.Core.GameConfig = {
           type: Phaser.AUTO,
           parent: gameRef.current!,
@@ -43,9 +47,6 @@ export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) 
         };
 
         phaserRef.current = new Phaser.Game(config);
-
-        // Pass room to scene
-        scene.scene.start("SnakeScene", { room });
       });
     });
 

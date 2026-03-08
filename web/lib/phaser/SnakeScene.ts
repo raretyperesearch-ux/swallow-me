@@ -39,10 +39,8 @@ export class SnakeScene extends Phaser.Scene {
     super({ key: "SnakeScene" });
   }
 
-  init(data: { room: Colyseus.Room }) {
-    this.room = data.room;
-    this.mySessionId = data.room.sessionId;
-  }
+  // room and mySessionId are set directly on the instance before Phaser boots
+  init() {}
 
   create() {
     if (!this.room) return;
