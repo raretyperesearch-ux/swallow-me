@@ -3,19 +3,15 @@ import * as Colyseus from "colyseus.js";
 // ─── Types ──────────────────────────────────────────
 
 interface LocalSnake {
-  // Client-generated body segments (follow-the-leader)
   segments: { x: number; y: number }[];
-  // Interpolated head
   headX: number;
   headY: number;
   angle: number;
-  // Server targets
   serverHeadX: number;
   serverHeadY: number;
   serverAngle: number;
   serverSpeed: number;
   serverLength: number;
-  // Metadata
   alive: boolean;
   skinId: number;
   boosting: boolean;
@@ -25,10 +21,8 @@ interface LocalSnake {
   valueUsdc: number;
 }
 
-// Segment spacing — must match server SEGMENT_SPACING
 const SEGMENT_SPACING = 4;
 
-// Food colors
 const FOOD_COLORS = [
   "#FF0000", "#FFFF00", "#00FF00", "#FF00FF",
   "#FFFFFF", "#00FFFF", "#7FFF00", "#FFCC00",
@@ -36,7 +30,6 @@ const FOOD_COLORS = [
 
 const NUM_BODY_SKINS = 13;
 
-// Skin colors for minimap dots
 const SKIN_COLORS = [
   "#FF4444", "#44FF44", "#4444FF", "#FFFF44",
   "#FF44FF", "#44FFFF", "#FF8844", "#88FF44",
@@ -54,6 +47,11 @@ export class GameRenderer {
   private animFrame: number = 0;
   private destroyed: boolean = false;
 
+  // DPI
+  private dpr: number = 1;
+  private cssW: number = 0; // CSS pixel dimensions (for drawing coords)
+  private cssH: number = 0;
+
   // Camera
   private camX: number = 0;
   private camY: number = 0;
@@ -61,6 +59,7 @@ export class GameRenderer {
   // Local state
   private localSnakes: Map<string, LocalSnake> = new Map();
   private arenaRadius: number = 3000;
+  private bgPattern: CanvasPattern | null = null;
 
   // Assets
   private bgImage: HTMLImageElement | null = null;
@@ -86,11 +85,10 @@ export class GameRenderer {
   private joystickCanvas: HTMLCanvasElement | null = null;
   private joystickCtx: CanvasRenderingContext2D | null = null;
 
-  // Joystick config
   private readonly JOYSTICK_OUTER_R = 60;
   private readonly JOYSTICK_INNER_R = 25;
   private readonly JOYSTICK_MARGIN = 40;
-  private readonly BOOST_THRESHOLD = 0.7; // distance ratio to trigger boost
+  private readonly BOOST_THRESHOLD = 0.7;
 
   // Callbacks
   public onDeath?: (data: any) => void;
@@ -102,17 +100,18 @@ export class GameRenderer {
     this.mySessionId = room.sessionId;
 
     this.canvas = document.createElement("canvas");
-    this.canvas.width = window.innerWidth;
-    this.canvas.height = window.innerHeight;
     this.canvas.style.display = "block";
+    this.canvas.style.width = "100%";
+    this.canvas.style.height = "100%";
+    this.canvas.style.touchAction = "none";
     container.appendChild(this.canvas);
     this.ctx = this.canvas.getContext("2d")!;
 
-    // Detect touch device
     this.isTouchDevice =
       navigator.maxTouchPoints > 0 ||
       "ontouchstart" in window;
 
+    this.resizeCanvas();
     this.loadAssets();
     this.setupListeners();
     this.setupInput();
@@ -124,12 +123,37 @@ export class GameRenderer {
     this.loop();
   }
 
+  // ─── DPI-aware canvas sizing ────────────────────────
+
+  private resizeCanvas() {
+    this.dpr = window.devicePixelRatio || 1;
+    this.cssW = this.canvas.clientWidth || window.innerWidth;
+    this.cssH = this.canvas.clientHeight || window.innerHeight;
+    this.canvas.width = this.cssW * this.dpr;
+    this.canvas.height = this.cssH * this.dpr;
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = "high";
+    // Rebuild bg pattern at new resolution
+    if (this.bgImage && this.bgImage.complete) {
+      this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
+    }
+  }
+
   // ─── Assets ───────────────────────────────────────
 
   private loadAssets() {
     let loaded = 0;
     const total = 2 + NUM_BODY_SKINS;
-    const onLoad = () => { loaded++; if (loaded >= total) this.assetsLoaded = true; };
+    const onLoad = () => {
+      loaded++;
+      if (loaded >= total) {
+        this.assetsLoaded = true;
+        if (this.bgImage) {
+          this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
+        }
+      }
+    };
 
     this.bgImage = new Image();
     this.bgImage.onload = onLoad;
@@ -147,11 +171,10 @@ export class GameRenderer {
     }
   }
 
-  // ─── Colyseus Sync (head + metadata only, NO segments) ──
+  // ─── Colyseus Sync ────────────────────────────────
 
   private setupListeners() {
     this.room.state.snakes.onAdd((snake: any, key: string) => {
-      // Initialize local segments behind the head position
       const segs: { x: number; y: number }[] = [];
       const len = snake.length || 50;
       const angle = snake.angle || 0;
@@ -213,23 +236,21 @@ export class GameRenderer {
 
   private setupInput() {
     window.addEventListener("resize", () => {
-      this.canvas.width = window.innerWidth;
-      this.canvas.height = window.innerHeight;
+      this.resizeCanvas();
       if (this.joystickCanvas) {
-        this.joystickCanvas.width = window.innerWidth;
-        this.joystickCanvas.height = window.innerHeight;
+        this.resizeJoystickCanvas();
         this.updateJoystickCenter();
       }
     });
 
-    // Desktop mouse controls
+    // Desktop mouse
     this.canvas.addEventListener("mousemove", (e) => {
       if (this.isTouchDevice) return;
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
       this.sendInput();
     });
-    this.canvas.addEventListener("mousedown", () => {
+    this.canvas.addEventListener("mousedown", (e) => {
       if (this.isTouchDevice) return;
       this.mouseDown = true;
       this.sendInput();
@@ -240,8 +261,7 @@ export class GameRenderer {
       this.sendInput();
     });
 
-    // Touch controls on game canvas (non-joystick touches for looking around)
-    // Only used if NOT a touch device (joystick handles touch input)
+    // Non-joystick touch fallback (for devices detected as non-touch but having touch)
     if (!this.isTouchDevice) {
       this.canvas.addEventListener("touchmove", (e) => {
         e.preventDefault();
@@ -250,33 +270,37 @@ export class GameRenderer {
         this.sendInput();
       }, { passive: false });
       this.canvas.addEventListener("touchstart", (e) => {
+        e.preventDefault();
         this.mouseDown = true;
         this.mouseX = e.touches[0].clientX;
         this.mouseY = e.touches[0].clientY;
         this.sendInput();
-      });
-      this.canvas.addEventListener("touchend", () => { this.mouseDown = false; this.sendInput(); });
+      }, { passive: false });
+      this.canvas.addEventListener("touchend", (e) => {
+        e.preventDefault();
+        this.mouseDown = false;
+        this.sendInput();
+      }, { passive: false });
     }
   }
 
   // ─── Mobile Joystick ──────────────────────────────
 
   private setupJoystick(container: HTMLDivElement) {
-    // Create overlay canvas for joystick
     this.joystickCanvas = document.createElement("canvas");
-    this.joystickCanvas.width = window.innerWidth;
-    this.joystickCanvas.height = window.innerHeight;
     this.joystickCanvas.style.position = "absolute";
     this.joystickCanvas.style.top = "0";
     this.joystickCanvas.style.left = "0";
+    this.joystickCanvas.style.width = "100%";
+    this.joystickCanvas.style.height = "100%";
     this.joystickCanvas.style.pointerEvents = "auto";
     this.joystickCanvas.style.zIndex = "10";
+    this.joystickCanvas.style.touchAction = "none";
     container.appendChild(this.joystickCanvas);
     this.joystickCtx = this.joystickCanvas.getContext("2d")!;
-
+    this.resizeJoystickCanvas();
     this.updateJoystickCenter();
 
-    // Joystick touch handlers
     this.joystickCanvas.addEventListener("touchstart", (e) => {
       e.preventDefault();
       for (let i = 0; i < e.changedTouches.length; i++) {
@@ -285,7 +309,6 @@ export class GameRenderer {
         const dy = touch.clientY - this.joystickCenterY;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        // If touch is near the joystick area, capture it
         if (dist < this.JOYSTICK_OUTER_R * 2.5) {
           this.joystickTouchId = touch.identifier;
           this.joystickActive = true;
@@ -293,8 +316,7 @@ export class GameRenderer {
           return;
         }
       }
-
-      // Any other touch on screen = direction (use center-of-screen angle)
+      // Non-joystick touch = direction from screen center
       const touch = e.changedTouches[0];
       this.mouseX = touch.clientX;
       this.mouseY = touch.clientY;
@@ -329,17 +351,28 @@ export class GameRenderer {
     }, { passive: false });
 
     this.joystickCanvas.addEventListener("touchcancel", (e) => {
+      e.preventDefault();
       this.joystickActive = false;
       this.joystickTouchId = null;
       this.joystickKnobX = this.joystickCenterX;
       this.joystickKnobY = this.joystickCenterY;
       this.mouseDown = false;
-    });
+    }, { passive: false });
+  }
+
+  private resizeJoystickCanvas() {
+    if (!this.joystickCanvas || !this.joystickCtx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.joystickCanvas.clientWidth || window.innerWidth;
+    const h = this.joystickCanvas.clientHeight || window.innerHeight;
+    this.joystickCanvas.width = w * dpr;
+    this.joystickCanvas.height = h * dpr;
+    this.joystickCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   private updateJoystickCenter() {
     this.joystickCenterX = this.JOYSTICK_MARGIN + this.JOYSTICK_OUTER_R;
-    this.joystickCenterY = window.innerHeight - this.JOYSTICK_MARGIN - this.JOYSTICK_OUTER_R;
+    this.joystickCenterY = (this.joystickCanvas?.clientHeight || window.innerHeight) - this.JOYSTICK_MARGIN - this.JOYSTICK_OUTER_R;
     this.joystickKnobX = this.joystickCenterX;
     this.joystickKnobY = this.joystickCenterY;
   }
@@ -351,7 +384,6 @@ export class GameRenderer {
     const maxDist = this.JOYSTICK_OUTER_R;
 
     if (dist > maxDist) {
-      // Clamp to outer ring
       this.joystickKnobX = this.joystickCenterX + (dx / dist) * maxDist;
       this.joystickKnobY = this.joystickCenterY + (dy / dist) * maxDist;
     } else {
@@ -359,7 +391,6 @@ export class GameRenderer {
       this.joystickKnobY = touchY;
     }
 
-    // Calculate angle and boost
     const normalizedDist = Math.min(dist, maxDist) / maxDist;
     if (normalizedDist > 0.1) {
       this.inputAngle = Math.atan2(dy, dx);
@@ -371,13 +402,16 @@ export class GameRenderer {
   private sendJoystickInput() {
     const now = Date.now();
     if (now < this.inputThrottle) return;
-    this.inputThrottle = now + 33;
+    this.inputThrottle = now + 33; // ~30 events/sec
     this.room.send("input", { angle: this.inputAngle, boost: this.mouseDown });
   }
 
   private sendDesktopStyleInput() {
-    const cx = this.canvas.width / 2;
-    const cy = this.canvas.height / 2;
+    const now = Date.now();
+    if (now < this.inputThrottle) return;
+    this.inputThrottle = now + 33;
+    const cx = this.cssW / 2;
+    const cy = this.cssH / 2;
     const angle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
     this.room.send("input", { angle, boost: false });
   }
@@ -385,7 +419,9 @@ export class GameRenderer {
   private drawJoystick() {
     if (!this.joystickCtx || !this.joystickCanvas) return;
     const ctx = this.joystickCtx;
-    ctx.clearRect(0, 0, this.joystickCanvas.width, this.joystickCanvas.height);
+    const w = this.joystickCanvas.clientWidth || window.innerWidth;
+    const h = this.joystickCanvas.clientHeight || window.innerHeight;
+    ctx.clearRect(0, 0, w, h);
 
     // Outer ring
     ctx.beginPath();
@@ -414,8 +450,8 @@ export class GameRenderer {
     if (now < this.inputThrottle) return;
     this.inputThrottle = now + 33;
 
-    const cx = this.canvas.width / 2;
-    const cy = this.canvas.height / 2;
+    const cx = this.cssW / 2;
+    const cy = this.cssH / 2;
     const angle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
     this.room.send("input", { angle, boost: this.mouseDown });
   }
@@ -431,47 +467,40 @@ export class GameRenderer {
   };
 
   private update() {
-    // Compute current input angle for client-side prediction
+    // Compute input angle (use CSS pixel dimensions, not canvas pixel dimensions)
     if (!this.isTouchDevice || !this.joystickActive) {
-      const cx = this.canvas.width / 2;
-      const cy = this.canvas.height / 2;
+      const cx = this.cssW / 2;
+      const cy = this.cssH / 2;
       this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
     }
-    // If joystick is active, inputAngle is already set by updateJoystickKnob
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
-
       const isMe = id === this.mySessionId;
 
       if (isMe) {
-        // Client-side prediction: move head immediately based on input
         const speed = snake.serverSpeed || 4.5;
         snake.headX += Math.cos(this.inputAngle) * speed;
         snake.headY += Math.sin(this.inputAngle) * speed;
-        // Correct toward server position
         snake.headX += (snake.serverHeadX - snake.headX) * 0.15;
         snake.headY += (snake.serverHeadY - snake.headY) * 0.15;
       } else {
-        // Other snakes: lerp toward server position
         snake.headX += (snake.serverHeadX - snake.headX) * 0.25;
         snake.headY += (snake.serverHeadY - snake.headY) * 0.25;
       }
 
-      // 2. Smooth angle rotation — lerp at 0.15 for satisfying wide arcs
+      // Smooth angle lerp at 0.15
       const targetAngle = isMe ? this.inputAngle : snake.serverAngle;
       let angleDiff = targetAngle - snake.angle;
       while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
       while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
       snake.angle += angleDiff * 0.15;
 
-      // 3. Set first segment to head
       if (snake.segments.length > 0) {
         snake.segments[0].x = snake.headX;
         snake.segments[0].y = snake.headY;
       }
 
-      // 4. Follow-the-leader: each segment lerps toward the one ahead
       const LERP_RATE = 0.35;
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
@@ -479,14 +508,12 @@ export class GameRenderer {
         const dx = curr.x - prev.x;
         const dy = curr.y - prev.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-
         if (dist > SEGMENT_SPACING) {
           curr.x += (prev.x - curr.x) * LERP_RATE;
           curr.y += (prev.y - curr.y) * LERP_RATE;
         }
       }
 
-      // 5. Grow/shrink segments to match server length
       const targetLen = snake.serverLength;
       while (snake.segments.length < targetLen) {
         const last = snake.segments[snake.segments.length - 1];
@@ -497,11 +524,11 @@ export class GameRenderer {
       }
     }
 
-    // Smooth camera follow
+    // Smooth camera — lerp at 0.08 for premium feel
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
-      this.camX += (me.headX - this.camX) * 0.12;
-      this.camY += (me.headY - this.camY) * 0.12;
+      this.camX += (me.headX - this.camX) * 0.08;
+      this.camY += (me.headY - this.camY) * 0.08;
 
       this.onStatsUpdate?.({
         kills: me.kills,
@@ -511,38 +538,33 @@ export class GameRenderer {
     }
   }
 
-  // ─── Drawing ──────────────────────────────────────
+  // ─── Drawing (all coords in CSS pixels) ───────────
 
   private draw() {
-    const W = this.canvas.width;
-    const H = this.canvas.height;
+    const W = this.cssW;
+    const H = this.cssH;
     const ctx = this.ctx;
 
     ctx.clearRect(0, 0, W, H);
 
-    // Background
-    if (this.bgImage && this.assetsLoaded) {
-      const bgW = this.bgImage.width;
-      const bgH = this.bgImage.height;
-      const srcX = ((this.camX * 0.8) % bgW + bgW) % bgW;
-      const srcY = ((this.camY * 0.8) % bgH + bgH) % bgH;
-      for (let ox = -1; ox <= 1; ox++) {
-        for (let oy = -1; oy <= 1; oy++) {
-          ctx.drawImage(this.bgImage, -srcX + ox * bgW, -srcY + oy * bgH, bgW, bgH);
-        }
-      }
+    // Background — tiled with pattern + parallax
+    if (this.bgPattern && this.assetsLoaded) {
+      ctx.save();
+      const offsetX = -(this.camX * 0.8);
+      const offsetY = -(this.camY * 0.8);
+      ctx.translate(offsetX, offsetY);
+      ctx.fillStyle = this.bgPattern;
+      ctx.fillRect(-offsetX, -offsetY, W, H);
+      ctx.restore();
     } else {
       ctx.fillStyle = "#0a0a1a";
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Boundary
     this.drawBoundary(ctx, W, H);
-
-    // Food (only render what's on screen)
     this.drawFood(ctx, W, H);
 
-    // Snakes (our snake drawn last = on top)
+    // Snakes — draw ours last (on top)
     const sortedIds: string[] = [];
     for (const [id] of this.localSnakes) {
       if (id !== this.mySessionId) sortedIds.push(id);
@@ -557,31 +579,38 @@ export class GameRenderer {
       }
     }
 
-    // Minimap (drawn last, on top of everything)
     this.drawMinimap(ctx, W, H);
   }
 
-  // ─── Helpers ──────────────────────────────────────
+  // ─── Coordinate helpers (CSS pixels) ───────────────
 
-  private toScreenX(wx: number): number { return wx - this.camX + this.canvas.width / 2; }
-  private toScreenY(wy: number): number { return wy - this.camY + this.canvas.height / 2; }
+  private toScreenX(wx: number): number { return wx - this.camX + this.cssW / 2; }
+  private toScreenY(wy: number): number { return wy - this.camY + this.cssH / 2; }
 
   private getSnakeSize(snake: LocalSnake): number {
-    // Uniform body size, scales up slightly with length
     const baseSize = 28;
     const scale = Math.pow(snake.serverLength / 50, 0.2);
     return baseSize * Math.min(2.0, scale);
   }
 
-  // ─── Snake Drawing ────────────────────────────────
+  // ─── Snake Drawing (3D worm look) ─────────────────
 
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (snake.segments.length < 2) return;
 
     const size = this.getSnakeSize(snake);
     const bodyImg = this.bodyImages[snake.skinId % this.bodyImages.length];
+    const skinColor = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
+    const r = size / 2;
 
-    // Body segments back-to-front — UNIFORM size (no taper)
+    // Subtle shadow under entire snake
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetX = 2;
+    ctx.shadowOffsetY = 2;
+
+    // Body segments back-to-front
     for (let i = snake.segments.length - 1; i >= 1; i--) {
       const seg = snake.segments[i];
       const sx = this.toScreenX(seg.x);
@@ -590,20 +619,73 @@ export class GameRenderer {
       if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
 
       if (bodyImg && bodyImg.complete) {
-        ctx.drawImage(bodyImg, sx - size / 2, sy - size / 2, size, size);
+        ctx.drawImage(bodyImg, sx - r, sy - r, size, size);
+      } else {
+        // Fallback: 3D gradient circle
+        const grad = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, 0, sx, sy, r);
+        grad.addColorStop(0, "#ffffff66");
+        grad.addColorStop(0.4, skinColor);
+        grad.addColorStop(1, "#00000044");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
-    // Head (rotated to movement angle)
+    ctx.restore(); // clear shadow
+
+    // Outline on body segments for definition
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
+    ctx.lineWidth = 1;
+    for (let i = snake.segments.length - 1; i >= 1; i--) {
+      const seg = snake.segments[i];
+      const sx = this.toScreenX(seg.x);
+      const sy = this.toScreenY(seg.y);
+      if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Head
     const headSx = this.toScreenX(snake.headX);
     const headSy = this.toScreenY(snake.headY);
     const headSize = size * 1.3;
 
     if (this.headImage && this.headImage.complete) {
       ctx.save();
+      ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+      ctx.shadowBlur = 6;
       ctx.translate(headSx, headSy);
       ctx.rotate(snake.angle - Math.PI / 2);
       ctx.drawImage(this.headImage, -headSize / 2, -headSize / 2, headSize, headSize);
+      ctx.restore();
+    } else {
+      // Procedural head fallback
+      ctx.save();
+      ctx.translate(headSx, headSy);
+      ctx.rotate(snake.angle - Math.PI / 2);
+      const hR = headSize / 2;
+      const grad = ctx.createRadialGradient(-hR * 0.2, -hR * 0.2, 0, 0, 0, hR);
+      grad.addColorStop(0, "#ffffff88");
+      grad.addColorStop(0.5, skinColor);
+      grad.addColorStop(1, "#00000055");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, hR, hR * 1.15, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Eyes
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(-hR * 0.35, -hR * 0.5, hR * 0.22, 0, Math.PI * 2);
+      ctx.arc(hR * 0.35, -hR * 0.5, hR * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(-hR * 0.35, -hR * 0.5, hR * 0.1, 0, Math.PI * 2);
+      ctx.arc(hR * 0.35, -hR * 0.5, hR * 0.1, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
 
@@ -635,7 +717,7 @@ export class GameRenderer {
     ctx.fillText(snake.name, sx, sy - size * 0.8);
   }
 
-  // ─── Food (only render on-screen) ─────────────────
+  // ─── Food (glow + solid core) ─────────────────────
 
   private drawFood(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const time = Date.now();
@@ -644,8 +726,7 @@ export class GameRenderer {
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
 
-      // Viewport culling
-      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) return;
+      if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) return;
 
       const isDeath = food.size === 2;
       const baseSize = isDeath ? 8 : 4;
@@ -656,16 +737,14 @@ export class GameRenderer {
       const color = FOOD_COLORS[colorIdx];
 
       // Glow halo
-      const gradient = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 3);
-      gradient.addColorStop(0, color);
-      gradient.addColorStop(0.4, color + "66");
-      gradient.addColorStop(1, color + "00");
-      ctx.fillStyle = gradient;
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(sx, sy, r * 3, 0, Math.PI * 2);
+      ctx.arc(sx, sy, r * 2.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Core
+      // Solid core
+      ctx.globalAlpha = 1.0;
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);
@@ -708,9 +787,8 @@ export class GameRenderer {
     const PADDING = 15;
     const mx = W - SIZE - PADDING;
     const my = H - SIZE - PADDING;
-    const scale = (SIZE - 20) / (this.arenaRadius * 2); // map world coords to minimap
+    const scale = (SIZE - 20) / (this.arenaRadius * 2);
 
-    // Background with rounded corners
     ctx.save();
     const r = 12;
     ctx.beginPath();
@@ -728,11 +806,9 @@ export class GameRenderer {
     ctx.fill();
     ctx.clip();
 
-    // Arena center on minimap
     const centerX = mx + SIZE / 2;
     const centerY = my + SIZE / 2;
 
-    // Arena boundary circle (red)
     const arenaR = this.arenaRadius * scale;
     ctx.strokeStyle = "rgba(255, 0, 68, 0.5)";
     ctx.lineWidth = 1.5;
@@ -740,14 +816,12 @@ export class GameRenderer {
     ctx.arc(centerX, centerY, arenaR, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Draw all snake dots
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
 
       const dotX = centerX + snake.headX * scale;
       const dotY = centerY + snake.headY * scale;
 
-      // Determine color
       let color: string;
       let dotSize: number;
 
@@ -767,7 +841,6 @@ export class GameRenderer {
       ctx.arc(dotX, dotY, dotSize, 0, Math.PI * 2);
       ctx.fill();
 
-      // Extra glow for self
       if (id === this.mySessionId) {
         ctx.strokeStyle = "rgba(0, 255, 102, 0.4)";
         ctx.lineWidth = 1;
