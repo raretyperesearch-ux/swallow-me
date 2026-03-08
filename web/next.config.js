@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: false, // Phaser doesn't play nice with strict mode
+  reactStrictMode: false,
   webpack: (config) => {
     config.resolve.fallback = {
       ...config.resolve.fallback,

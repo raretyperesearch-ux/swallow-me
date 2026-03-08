@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import * as Colyseus from "colyseus.js";
 import { joinRoom } from "../../lib/colyseus/client";
 
-// Dynamic import SnakeGame (no SSR — Phaser needs browser)
+// Dynamic import SnakeGame (no SSR — Canvas needs browser)
 const SnakeGame = dynamic(() => import("../../components/SnakeGame"), {
   ssr: false,
 });

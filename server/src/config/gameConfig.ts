@@ -17,7 +17,7 @@ export const GAME_CONFIG = {
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 
   // Snake sizing
-  INITIAL_LENGTH: 30, // Starting snake length (segments)
+  INITIAL_LENGTH: 50, // Starting snake length (segments)
   MAX_LENGTH: 500, // Cap to prevent perf issues
   SEGMENT_SPACING: 4, // Distance between body segments
   HEAD_RADIUS: 14, // Collision radius of the head

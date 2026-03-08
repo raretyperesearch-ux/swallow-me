@@ -10,49 +10,25 @@ interface SnakeGameProps {
 }
 
 export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) {
-  const gameRef = useRef<HTMLDivElement>(null);
-  const phaserRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<any>(null);
   const [stats, setStats] = useState({ kills: 0, value: 0, alive: 0 });
 
   useEffect(() => {
-    if (!gameRef.current || phaserRef.current) return;
+    if (!containerRef.current || rendererRef.current) return;
 
-    // Dynamic import Phaser (client-side only)
-    import("phaser").then((Phaser) => {
-      import("../lib/phaser/SnakeScene").then(({ SnakeScene }) => {
-        const scene = new SnakeScene();
-        scene.onDeath = onDeath;
-        scene.onCashout = onCashout;
-        scene.onStatsUpdate = setStats;
-
-        // Set room directly on the instance BEFORE Phaser boots
-        (scene as any).room = room;
-        (scene as any).mySessionId = room.sessionId;
-
-        const config: Phaser.Types.Core.GameConfig = {
-          type: Phaser.AUTO,
-          parent: gameRef.current!,
-          width: window.innerWidth,
-          height: window.innerHeight,
-          backgroundColor: "#0a0a1a",
-          scene: [scene],
-          physics: { default: "arcade" },
-          scale: {
-            mode: Phaser.Scale.RESIZE,
-            autoCenter: Phaser.Scale.CENTER_BOTH,
-          },
-          input: {
-            touch: { capture: true },
-          },
-        };
-
-        phaserRef.current = new Phaser.Game(config);
-      });
+    // Dynamic import Canvas renderer (client-side only)
+    import("../lib/canvas/GameRenderer").then(({ GameRenderer }) => {
+      const renderer = new GameRenderer(containerRef.current!, room);
+      renderer.onDeath = onDeath;
+      renderer.onCashout = onCashout;
+      renderer.onStatsUpdate = setStats;
+      rendererRef.current = renderer;
     });
 
     return () => {
-      phaserRef.current?.destroy(true);
-      phaserRef.current = null;
+      rendererRef.current?.destroy();
+      rendererRef.current = null;
     };
   }, [room]);
 
@@ -63,7 +39,7 @@ export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) 
   return (
     <div className="relative w-full h-screen">
       {/* Game canvas */}
-      <div ref={gameRef} className="w-full h-full" />
+      <div ref={containerRef} className="w-full h-full" />
 
       {/* HUD Overlay */}
       <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-start pointer-events-none">
