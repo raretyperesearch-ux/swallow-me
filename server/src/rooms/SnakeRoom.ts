@@ -1,5 +1,5 @@
 import { Room, Client } from "colyseus";
-import { SnakeRoomState, SnakeEntity, SnakeSegment, FoodOrb, KillFeedEntry } from "./SnakeState";
+import { SnakeRoomState, SnakeEntity, FoodOrb, KillFeedEntry } from "./SnakeState";
 import { ServerSnake, createSnake } from "../game/Snake";
 import { ServerFood, spawnRandomFood } from "../game/Food";
 import { runGameTick } from "../game/GameLoop";
@@ -317,6 +317,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         this.state.snakes.set(id, stateSnake);
       }
 
+      // Only sync head + metadata — NO segments over the wire
       stateSnake.headX = snake.headX;
       stateSnake.headY = snake.headY;
       stateSnake.angle = snake.angle;
@@ -326,16 +327,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       stateSnake.alive = snake.alive;
       stateSnake.kills = snake.kills;
       stateSnake.valueUsdc = snake.valueUsdc;
-
-      // Sync segments (every 2nd for long snakes, all for short ones)
-      const downsample = snake.segments.length > 100 ? 2 : 1;
-      stateSnake.segments.clear();
-      for (let i = 0; i < snake.segments.length; i += downsample) {
-        const seg = new SnakeSegment();
-        seg.x = snake.segments[i].x;
-        seg.y = snake.segments[i].y;
-        stateSnake.segments.push(seg);
-      }
     }
 
     // Remove dead snakes from state

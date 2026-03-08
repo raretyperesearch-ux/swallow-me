@@ -1,10 +1,5 @@
 import { Schema, MapSchema, ArraySchema, type, defineTypes } from "@colyseus/schema";
 
-export class SnakeSegment extends Schema {
-  @type("float32") x: number = 0;
-  @type("float32") y: number = 0;
-}
-
 export class SnakeEntity extends Schema {
   @type("string") id: string = "";
   @type("string") name: string = "";
@@ -18,18 +13,7 @@ export class SnakeEntity extends Schema {
   @type("boolean") isBot: boolean = false;
   @type("boolean") alive: boolean = true;
   @type("uint16") kills: number = 0;
-
-  // USDC value in lamports (6 decimals) — stored as number for schema compat
-  // Real tracking happens server-side; this is the display value
   @type("float64") valueUsdc: number = 0;
-
-  // Body segments synced for rendering
-  @type([SnakeSegment]) segments = new ArraySchema<SnakeSegment>();
-
-  // Server-side only (not synced)
-  wallet?: string;
-  targetAngle?: number;
-  lastInputTime?: number;
 }
 
 export class FoodOrb extends Schema {

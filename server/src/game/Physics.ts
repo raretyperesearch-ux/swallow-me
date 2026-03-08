@@ -150,7 +150,7 @@ export function checkFoodCollisions(
     if (!snake.alive) continue;
 
     for (const [foodId, food] of foods) {
-      const eatDist = GAME_CONFIG.HEAD_RADIUS + (food.size === 2 ? 15 : 8);
+      const eatDist = GAME_CONFIG.HEAD_RADIUS + 20;
       const dSq = distanceSq(snake.headX, snake.headY, food.x, food.y);
 
       if (dSq < eatDist * eatDist) {
