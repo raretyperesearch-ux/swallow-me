@@ -214,6 +214,12 @@ export class GameRenderer {
   // Food count tracking (for eat sound)
   private lastFoodCount: number = -1;
 
+  // FPS counter
+  private lastFrameTime: number = 0;
+  private fps: number = 0;
+  private fpsFrames: number = 0;
+  private fpsLastUpdate: number = 0;
+
   // Input
   private mouseX: number = 0;
   private mouseY: number = 0;
@@ -739,6 +745,16 @@ export class GameRenderer {
   private loop = () => {
     if (this.destroyed) return;
 
+    // FPS tracking
+    const now = performance.now();
+    this.fpsFrames++;
+    if (now - this.fpsLastUpdate > 1000) {
+      this.fps = this.fpsFrames;
+      this.fpsFrames = 0;
+      this.fpsLastUpdate = now;
+    }
+    this.lastFrameTime = now;
+
     if (!this.ready) {
       this.drawLoadingScreen();
     } else {
@@ -836,16 +852,17 @@ export class GameRenderer {
         snake.segments[0].y = snake.headY;
       }
 
-      const LERP_RATE = 0.35;
+      // Hard chain constraint: segments can NEVER be more than SEGMENT_SPACING apart
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
-        const dx = curr.x - prev.x;
-        const dy = curr.y - prev.y;
+        const dx = prev.x - curr.x;
+        const dy = prev.y - curr.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > SEGMENT_SPACING) {
-          curr.x += (prev.x - curr.x) * LERP_RATE;
-          curr.y += (prev.y - curr.y) * LERP_RATE;
+          const ratio = SEGMENT_SPACING / dist;
+          curr.x = prev.x - dx * ratio;
+          curr.y = prev.y - dy * ratio;
         }
       }
 
@@ -930,6 +947,12 @@ export class GameRenderer {
     this.drawKillFeed(ctx, W, H);
 
     this.drawMinimap(ctx, W, H);
+
+    // FPS counter (top-left, below HUD)
+    ctx.font = "11px monospace";
+    ctx.textAlign = "left";
+    ctx.fillStyle = this.fps >= 50 ? "rgba(100,255,100,0.6)" : "rgba(255,100,100,0.8)";
+    ctx.fillText(`${this.fps} FPS`, 15, H - 10);
   }
 
   // ─── Coordinate helpers ───────────────────────────
@@ -953,12 +976,7 @@ export class GameRenderer {
     const skinColor = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
     const r = size / 2;
 
-    ctx.save();
-    ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetX = 2;
-    ctx.shadowOffsetY = 2;
-
+    // Body segments — single pass, no shadows (perf)
     for (let i = snake.segments.length - 1; i >= 1; i--) {
       const seg = snake.segments[i];
       const sx = this.toScreenX(seg.x);
@@ -968,39 +986,20 @@ export class GameRenderer {
       if (bodyImg && bodyImg.complete) {
         ctx.drawImage(bodyImg, sx - r, sy - r, size, size);
       } else {
-        const grad = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, 0, sx, sy, r);
-        grad.addColorStop(0, "#ffffff66");
-        grad.addColorStop(0.4, skinColor);
-        grad.addColorStop(1, "#00000044");
-        ctx.fillStyle = grad;
+        ctx.fillStyle = skinColor;
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
       }
     }
 
-    ctx.restore();
-
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
-    ctx.lineWidth = 1;
-    for (let i = snake.segments.length - 1; i >= 1; i--) {
-      const seg = snake.segments[i];
-      const sx = this.toScreenX(seg.x);
-      const sy = this.toScreenY(seg.y);
-      if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
+    // Head
     const headSx = this.toScreenX(snake.headX);
     const headSy = this.toScreenY(snake.headY);
     const headSize = size * 1.3;
 
     if (this.headImage && this.headImage.complete) {
       ctx.save();
-      ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
-      ctx.shadowBlur = 6;
       ctx.translate(headSx, headSy);
       ctx.rotate(snake.angle - Math.PI / 2);
       ctx.drawImage(this.headImage, -headSize / 2, -headSize / 2, headSize, headSize);
@@ -1010,14 +1009,11 @@ export class GameRenderer {
       ctx.translate(headSx, headSy);
       ctx.rotate(snake.angle - Math.PI / 2);
       const hR = headSize / 2;
-      const grad = ctx.createRadialGradient(-hR * 0.2, -hR * 0.2, 0, 0, 0, hR);
-      grad.addColorStop(0, "#ffffff88");
-      grad.addColorStop(0.5, skinColor);
-      grad.addColorStop(1, "#00000055");
-      ctx.fillStyle = grad;
+      ctx.fillStyle = skinColor;
       ctx.beginPath();
       ctx.ellipse(0, 0, hR, hR * 1.15, 0, 0, Math.PI * 2);
       ctx.fill();
+      // Eyes
       ctx.fillStyle = "#fff";
       ctx.beginPath();
       ctx.arc(-hR * 0.35, -hR * 0.5, hR * 0.22, 0, Math.PI * 2);
@@ -1031,6 +1027,7 @@ export class GameRenderer {
       ctx.restore();
     }
 
+    // Boost glow
     if (snake.boosting && isMe) {
       const gradient = ctx.createRadialGradient(headSx, headSy, 0, headSx, headSy, headSize * 3);
       gradient.addColorStop(0, "rgba(255, 255, 100, 0.15)");

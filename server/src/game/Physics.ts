@@ -42,14 +42,18 @@ export function checkSnakeCollisions(
     for (const [otherId, other] of snakes) {
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
-      // Skip first few segments of other snake (head area, prevent self-like kills)
-      const startSeg = 5;
+      // Skip first 3 segments of other snake (head area, prevent accidental kills)
+      const startSeg = 3;
+      // Use 1.5x collision distance for more forgiving detection
+      const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.5;
+      const collisionDistSq = collisionDist * collisionDist;
+
       for (let i = startSeg; i < other.segments.length; i++) {
         const seg = other.segments[i];
-        const collisionDist = GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS;
         const dSq = distanceSq(headX, headY, seg.x, seg.y);
 
-        if (dSq < collisionDist * collisionDist) {
+        if (dSq < collisionDistSq) {
+          console.log(`[Collision] ${snake.name} hit ${other.name} body seg ${i}/${other.segments.length} dist=${Math.sqrt(dSq).toFixed(1)} threshold=${collisionDist.toFixed(1)}`);
           kills.push({
             killer: otherId,
             victim: id,
