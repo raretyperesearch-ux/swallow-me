@@ -21,6 +21,23 @@ interface LocalSnake {
   valueUsdc: number;
 }
 
+interface DeathParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  color: string;
+  life: number; // 0..1, starts at 1
+  size: number;
+}
+
+interface KillFeedItem {
+  killerName: string;
+  victimName: string;
+  amount: number;
+  timestamp: number;
+}
+
 const SEGMENT_SPACING = 4;
 
 const FOOD_COLORS = [
@@ -37,6 +54,122 @@ const SKIN_COLORS = [
   "#FFAA44",
 ];
 
+// ─── Sound Engine (Web Audio oscillators, no files) ──
+
+class GameAudio {
+  private ctx: AudioContext | null = null;
+  private boostOsc: OscillatorNode | null = null;
+  private boostGain: GainNode | null = null;
+  private _muted: boolean = false;
+
+  get muted() { return this._muted; }
+
+  private ensureCtx() {
+    if (!this.ctx) {
+      this.ctx = new AudioContext();
+    }
+    if (this.ctx.state === "suspended") {
+      this.ctx.resume();
+    }
+    return this.ctx;
+  }
+
+  toggleMute() {
+    this._muted = !this._muted;
+    if (this._muted) this.stopBoost();
+    return this._muted;
+  }
+
+  playEat() {
+    if (this._muted) return;
+    const ctx = this.ensureCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = 800;
+    gain.gain.value = 0.08;
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.05);
+  }
+
+  playKill() {
+    if (this._muted) return;
+    const ctx = this.ensureCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.2);
+    gain.gain.value = 0.12;
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+  }
+
+  playDeath() {
+    if (this._muted) return;
+    const ctx = this.ensureCtx();
+    // Noise burst via buffer
+    const len = ctx.sampleRate * 0.1;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.15;
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+  }
+
+  startBoost() {
+    if (this._muted || this.boostOsc) return;
+    const ctx = this.ensureCtx();
+    this.boostOsc = ctx.createOscillator();
+    this.boostGain = ctx.createGain();
+    this.boostOsc.type = "sine";
+    this.boostOsc.frequency.value = 150;
+    this.boostGain.gain.value = 0.06;
+    this.boostOsc.connect(this.boostGain).connect(ctx.destination);
+    this.boostOsc.start();
+  }
+
+  stopBoost() {
+    if (this.boostOsc) {
+      try { this.boostOsc.stop(); } catch {}
+      this.boostOsc.disconnect();
+      this.boostOsc = null;
+    }
+    if (this.boostGain) {
+      this.boostGain.disconnect();
+      this.boostGain = null;
+    }
+  }
+
+  destroy() {
+    this.stopBoost();
+    if (this.ctx) {
+      this.ctx.close();
+      this.ctx = null;
+    }
+  }
+}
+
+// ─── Asset Preloader ────────────────────────────────
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
 // ─── GameRenderer ───────────────────────────────────
 
 export class GameRenderer {
@@ -49,7 +182,7 @@ export class GameRenderer {
 
   // DPI
   private dpr: number = 1;
-  private cssW: number = 0; // CSS pixel dimensions (for drawing coords)
+  private cssW: number = 0;
   private cssH: number = 0;
 
   // Camera
@@ -66,6 +199,20 @@ export class GameRenderer {
   private headImage: HTMLImageElement | null = null;
   private bodyImages: HTMLImageElement[] = [];
   private assetsLoaded: boolean = false;
+
+  // Death particles
+  private particles: DeathParticle[] = [];
+
+  // Kill feed
+  private killFeed: KillFeedItem[] = [];
+
+  // Sound
+  private audio = new GameAudio();
+
+  // Boost tracking (for sound)
+  private wasBoosting: boolean = false;
+  // Food count tracking (for eat sound)
+  private lastFoodCount: number = -1;
 
   // Input
   private mouseX: number = 0;
@@ -90,10 +237,15 @@ export class GameRenderer {
   private readonly JOYSTICK_MARGIN = 40;
   private readonly BOOST_THRESHOLD = 0.7;
 
+  // Loading
+  private loadingProgress: number = 0;
+  private loadingTotal: number = 2 + NUM_BODY_SKINS;
+  private ready: boolean = false;
+
   // Callbacks
   public onDeath?: (data: any) => void;
   public onCashout?: (data: any) => void;
-  public onStatsUpdate?: (stats: { kills: number; value: number; alive: number }) => void;
+  public onStatsUpdate?: (stats: { kills: number; value: number; alive: number; length: number; muted: boolean }) => void;
 
   constructor(container: HTMLDivElement, room: Colyseus.Room) {
     this.room = room;
@@ -112,13 +264,21 @@ export class GameRenderer {
       "ontouchstart" in window;
 
     this.resizeCanvas();
-    this.loadAssets();
-    this.setupListeners();
     this.setupInput();
 
     if (this.isTouchDevice) {
       this.setupJoystick(container);
     }
+
+    // Preload all assets, then wire up Colyseus listeners
+    this.preloadAssets().then(() => {
+      this.assetsLoaded = true;
+      this.ready = true;
+      if (this.bgImage) {
+        this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
+      }
+      this.setupListeners();
+    });
 
     this.loop();
   }
@@ -134,41 +294,34 @@ export class GameRenderer {
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.imageSmoothingQuality = "high";
-    // Rebuild bg pattern at new resolution
     if (this.bgImage && this.bgImage.complete) {
       this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
     }
   }
 
-  // ─── Assets ───────────────────────────────────────
+  // ─── Asset Preloading ─────────────────────────────
 
-  private loadAssets() {
-    let loaded = 0;
-    const total = 2 + NUM_BODY_SKINS;
-    const onLoad = () => {
-      loaded++;
-      if (loaded >= total) {
-        this.assetsLoaded = true;
-        if (this.bgImage) {
-          this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
-        }
-      }
-    };
+  private async preloadAssets() {
+    const bodyPaths = Array.from({ length: NUM_BODY_SKINS }, (_, i) => `/assets/body/${i}.png`);
+    const allPaths = ["/assets/Map2.png", "/assets/head.png", ...bodyPaths];
+    this.loadingTotal = allPaths.length;
+    this.loadingProgress = 0;
 
-    this.bgImage = new Image();
-    this.bgImage.onload = onLoad;
-    this.bgImage.src = "/assets/Map2.png";
+    const results = await Promise.all(
+      allPaths.map((src) =>
+        loadImage(src).then((img) => {
+          this.loadingProgress++;
+          return img;
+        }).catch(() => {
+          this.loadingProgress++;
+          return null;
+        })
+      )
+    );
 
-    this.headImage = new Image();
-    this.headImage.onload = onLoad;
-    this.headImage.src = "/assets/head.png";
-
-    for (let i = 0; i < NUM_BODY_SKINS; i++) {
-      const img = new Image();
-      img.onload = onLoad;
-      img.src = `/assets/body/${i}.png`;
-      this.bodyImages.push(img);
-    }
+    this.bgImage = results[0];
+    this.headImage = results[1];
+    this.bodyImages = results.slice(2).filter((img): img is HTMLImageElement => img !== null);
   }
 
   // ─── Colyseus Sync ────────────────────────────────
@@ -221,6 +374,11 @@ export class GameRenderer {
     });
 
     this.room.state.snakes.onRemove((_: any, key: string) => {
+      // Spawn death particles at last known position
+      const snake = this.localSnakes.get(key);
+      if (snake) {
+        this.spawnDeathParticles(snake.headX, snake.headY, snake.skinId);
+      }
       this.localSnakes.delete(key);
     });
 
@@ -228,8 +386,125 @@ export class GameRenderer {
       this.arenaRadius = value;
     });
 
-    this.room.onMessage("death", (data: any) => { this.onDeath?.(data); });
+    // Kill feed from Colyseus state
+    this.room.state.killFeed.onAdd((entry: any) => {
+      this.killFeed.push({
+        killerName: entry.killerName,
+        victimName: entry.victimName,
+        amount: entry.amount,
+        timestamp: Date.now(),
+      });
+      // Play kill sound if we're the killer
+      const me = this.localSnakes.get(this.mySessionId);
+      if (me && entry.killerName === me.name) {
+        this.audio.playKill();
+      }
+      while (this.killFeed.length > 5) this.killFeed.shift();
+    });
+
+    this.room.onMessage("death", (data: any) => {
+      this.audio.playDeath();
+      this.onDeath?.(data);
+    });
     this.room.onMessage("cashout_success", (data: any) => { this.onCashout?.(data); });
+  }
+
+  // ─── Death Particles ──────────────────────────────
+
+  private spawnDeathParticles(worldX: number, worldY: number, skinId: number) {
+    const color = SKIN_COLORS[skinId % SKIN_COLORS.length];
+    const colors = [color, "#FFFFFF", "#FFFF00", FOOD_COLORS[skinId % FOOD_COLORS.length]];
+    for (let i = 0; i < 20; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 1 + Math.random() * 4;
+      this.particles.push({
+        x: worldX,
+        y: worldY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        life: 1.0,
+        size: 3 + Math.random() * 5,
+      });
+    }
+  }
+
+  private updateParticles() {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.96; // decelerate
+      p.vy *= 0.96;
+      p.life -= 1 / 60; // ~1 second at 60fps
+      if (p.life <= 0) {
+        this.particles.splice(i, 1);
+      }
+    }
+  }
+
+  private drawParticles(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    for (const p of this.particles) {
+      const sx = this.toScreenX(p.x);
+      const sy = this.toScreenY(p.y);
+      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
+
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(sx, sy, p.size * p.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+  }
+
+  // ─── Kill Feed Drawing ────────────────────────────
+
+  private drawKillFeed(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const now = Date.now();
+    // Remove expired entries (>5 seconds)
+    this.killFeed = this.killFeed.filter((e) => now - e.timestamp < 5000);
+    if (this.killFeed.length === 0) return;
+
+    const x = 15;
+    let y = H - 20;
+    ctx.font = "12px Arial, sans-serif";
+    ctx.textAlign = "left";
+
+    for (let i = this.killFeed.length - 1; i >= 0; i--) {
+      const entry = this.killFeed[i];
+      const age = now - entry.timestamp;
+      const alpha = Math.max(0, 1 - age / 5000);
+
+      const text = `${entry.killerName} swallowed ${entry.victimName} +$${entry.amount.toFixed(2)}`;
+      const metrics = ctx.measureText(text);
+      const pw = metrics.width + 16;
+      const ph = 22;
+
+      ctx.globalAlpha = alpha * 0.7;
+      ctx.fillStyle = "#000000";
+      // Rounded pill
+      const pr = 6;
+      ctx.beginPath();
+      ctx.moveTo(x + pr, y - ph);
+      ctx.lineTo(x + pw - pr, y - ph);
+      ctx.quadraticCurveTo(x + pw, y - ph, x + pw, y - ph + pr);
+      ctx.lineTo(x + pw, y - pr);
+      ctx.quadraticCurveTo(x + pw, y, x + pw - pr, y);
+      ctx.lineTo(x + pr, y);
+      ctx.quadraticCurveTo(x, y, x, y - pr);
+      ctx.lineTo(x, y - ph + pr);
+      ctx.quadraticCurveTo(x, y - ph, x + pr, y - ph);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(text, x + 8, y - 6);
+
+      y -= ph + 4;
+    }
+    ctx.globalAlpha = 1.0;
   }
 
   // ─── Input ────────────────────────────────────────
@@ -243,14 +518,13 @@ export class GameRenderer {
       }
     });
 
-    // Desktop mouse
     this.canvas.addEventListener("mousemove", (e) => {
       if (this.isTouchDevice) return;
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
       this.sendInput();
     });
-    this.canvas.addEventListener("mousedown", (e) => {
+    this.canvas.addEventListener("mousedown", () => {
       if (this.isTouchDevice) return;
       this.mouseDown = true;
       this.sendInput();
@@ -261,7 +535,6 @@ export class GameRenderer {
       this.sendInput();
     });
 
-    // Non-joystick touch fallback (for devices detected as non-touch but having touch)
     if (!this.isTouchDevice) {
       this.canvas.addEventListener("touchmove", (e) => {
         e.preventDefault();
@@ -308,7 +581,6 @@ export class GameRenderer {
         const dx = touch.clientX - this.joystickCenterX;
         const dy = touch.clientY - this.joystickCenterY;
         const dist = Math.sqrt(dx * dx + dy * dy);
-
         if (dist < this.JOYSTICK_OUTER_R * 2.5) {
           this.joystickTouchId = touch.identifier;
           this.joystickActive = true;
@@ -316,7 +588,6 @@ export class GameRenderer {
           return;
         }
       }
-      // Non-joystick touch = direction from screen center
       const touch = e.changedTouches[0];
       this.mouseX = touch.clientX;
       this.mouseY = touch.clientY;
@@ -402,7 +673,7 @@ export class GameRenderer {
   private sendJoystickInput() {
     const now = Date.now();
     if (now < this.inputThrottle) return;
-    this.inputThrottle = now + 33; // ~30 events/sec
+    this.inputThrottle = now + 33;
     this.room.send("input", { angle: this.inputAngle, boost: this.mouseDown });
   }
 
@@ -423,7 +694,6 @@ export class GameRenderer {
     const h = this.joystickCanvas.clientHeight || window.innerHeight;
     ctx.clearRect(0, 0, w, h);
 
-    // Outer ring
     ctx.beginPath();
     ctx.arc(this.joystickCenterX, this.joystickCenterY, this.JOYSTICK_OUTER_R, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
@@ -432,7 +702,6 @@ export class GameRenderer {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Inner knob
     const knobColor = this.joystickActive
       ? (this.mouseDown ? "rgba(100, 255, 100, 0.6)" : "rgba(255, 255, 255, 0.5)")
       : "rgba(255, 255, 255, 0.3)";
@@ -449,30 +718,92 @@ export class GameRenderer {
     const now = Date.now();
     if (now < this.inputThrottle) return;
     this.inputThrottle = now + 33;
-
     const cx = this.cssW / 2;
     const cy = this.cssH / 2;
     const angle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
     this.room.send("input", { angle, boost: this.mouseDown });
   }
 
+  // ─── Public: toggle mute ──────────────────────────
+
+  public toggleMute(): boolean {
+    return this.audio.toggleMute();
+  }
+
+  public isMuted(): boolean {
+    return this.audio.muted;
+  }
+
   // ─── Main Loop ────────────────────────────────────
 
   private loop = () => {
     if (this.destroyed) return;
-    this.update();
-    this.draw();
-    if (this.isTouchDevice) this.drawJoystick();
+
+    if (!this.ready) {
+      this.drawLoadingScreen();
+    } else {
+      this.update();
+      this.draw();
+    }
+
+    if (this.isTouchDevice && this.ready) this.drawJoystick();
     this.animFrame = requestAnimationFrame(this.loop);
   };
 
+  // ─── Loading Screen ───────────────────────────────
+
+  private drawLoadingScreen() {
+    const W = this.cssW;
+    const H = this.cssH;
+    const ctx = this.ctx;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0a0a1a";
+    ctx.fillRect(0, 0, W, H);
+
+    // Title
+    ctx.font = "bold 48px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("SWALLOW ME", W / 2, H / 2 - 40);
+
+    // Progress bar
+    const barW = 300;
+    const barH = 8;
+    const barX = (W - barW) / 2;
+    const barY = H / 2 + 10;
+    const progress = this.loadingTotal > 0 ? this.loadingProgress / this.loadingTotal : 0;
+
+    ctx.fillStyle = "#222";
+    ctx.beginPath();
+    ctx.roundRect(barX, barY, barW, barH, 4);
+    ctx.fill();
+
+    ctx.fillStyle = "#22c55e";
+    ctx.beginPath();
+    ctx.roundRect(barX, barY, barW * progress, barH, 4);
+    ctx.fill();
+
+    // Status text
+    ctx.font = "14px Arial, sans-serif";
+    ctx.fillStyle = "#888";
+    const statusText = progress < 1 ? "Loading assets..." : "Connecting to server...";
+    ctx.fillText(statusText, W / 2, barY + 30);
+  }
+
   private update() {
-    // Compute input angle (use CSS pixel dimensions, not canvas pixel dimensions)
     if (!this.isTouchDevice || !this.joystickActive) {
       const cx = this.cssW / 2;
       const cy = this.cssH / 2;
       this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
     }
+
+    // Track food count for eat sound
+    const currentFoodCount = this.room.state.food?.size ?? -1;
+    if (this.lastFoodCount >= 0 && currentFoodCount < this.lastFoodCount) {
+      this.audio.playEat();
+    }
+    this.lastFoodCount = currentFoodCount;
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
@@ -484,12 +815,16 @@ export class GameRenderer {
         snake.headY += Math.sin(this.inputAngle) * speed;
         snake.headX += (snake.serverHeadX - snake.headX) * 0.15;
         snake.headY += (snake.serverHeadY - snake.headY) * 0.15;
+
+        // Boost sound
+        if (snake.boosting && !this.wasBoosting) this.audio.startBoost();
+        if (!snake.boosting && this.wasBoosting) this.audio.stopBoost();
+        this.wasBoosting = snake.boosting;
       } else {
         snake.headX += (snake.serverHeadX - snake.headX) * 0.25;
         snake.headY += (snake.serverHeadY - snake.headY) * 0.25;
       }
 
-      // Smooth angle lerp at 0.15
       const targetAngle = isMe ? this.inputAngle : snake.serverAngle;
       let angleDiff = targetAngle - snake.angle;
       while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
@@ -524,7 +859,10 @@ export class GameRenderer {
       }
     }
 
-    // Smooth camera — lerp at 0.08 for premium feel
+    // Update death particles
+    this.updateParticles();
+
+    // Camera
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
       this.camX += (me.headX - this.camX) * 0.08;
@@ -534,11 +872,19 @@ export class GameRenderer {
         kills: me.kills,
         value: me.valueUsdc / 1_000_000,
         alive: this.room.state.aliveCount || 0,
+        length: me.serverLength,
+        muted: this.audio.muted,
       });
+    }
+
+    // Kill sound — check if our kills went up
+    if (me && me.kills > 0) {
+      // We track via onStatsUpdate callback, but for sound let's detect kill feed additions
+      // Kill sound is handled per kill feed entry add (in setupListeners)
     }
   }
 
-  // ─── Drawing (all coords in CSS pixels) ───────────
+  // ─── Drawing ──────────────────────────────────────
 
   private draw() {
     const W = this.cssW;
@@ -547,7 +893,6 @@ export class GameRenderer {
 
     ctx.clearRect(0, 0, W, H);
 
-    // Background — tiled with pattern + parallax
     if (this.bgPattern && this.assetsLoaded) {
       ctx.save();
       const offsetX = -(this.camX * 0.8);
@@ -564,7 +909,6 @@ export class GameRenderer {
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
 
-    // Snakes — draw ours last (on top)
     const sortedIds: string[] = [];
     for (const [id] of this.localSnakes) {
       if (id !== this.mySessionId) sortedIds.push(id);
@@ -579,10 +923,16 @@ export class GameRenderer {
       }
     }
 
+    // Death particles
+    this.drawParticles(ctx, W, H);
+
+    // Kill feed
+    this.drawKillFeed(ctx, W, H);
+
     this.drawMinimap(ctx, W, H);
   }
 
-  // ─── Coordinate helpers (CSS pixels) ───────────────
+  // ─── Coordinate helpers ───────────────────────────
 
   private toScreenX(wx: number): number { return wx - this.camX + this.cssW / 2; }
   private toScreenY(wy: number): number { return wy - this.camY + this.cssH / 2; }
@@ -593,7 +943,7 @@ export class GameRenderer {
     return baseSize * Math.min(2.0, scale);
   }
 
-  // ─── Snake Drawing (3D worm look) ─────────────────
+  // ─── Snake Drawing ────────────────────────────────
 
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (snake.segments.length < 2) return;
@@ -603,25 +953,21 @@ export class GameRenderer {
     const skinColor = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
     const r = size / 2;
 
-    // Subtle shadow under entire snake
     ctx.save();
     ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
     ctx.shadowBlur = 8;
     ctx.shadowOffsetX = 2;
     ctx.shadowOffsetY = 2;
 
-    // Body segments back-to-front
     for (let i = snake.segments.length - 1; i >= 1; i--) {
       const seg = snake.segments[i];
       const sx = this.toScreenX(seg.x);
       const sy = this.toScreenY(seg.y);
-
       if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
 
       if (bodyImg && bodyImg.complete) {
         ctx.drawImage(bodyImg, sx - r, sy - r, size, size);
       } else {
-        // Fallback: 3D gradient circle
         const grad = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, 0, sx, sy, r);
         grad.addColorStop(0, "#ffffff66");
         grad.addColorStop(0.4, skinColor);
@@ -633,9 +979,8 @@ export class GameRenderer {
       }
     }
 
-    ctx.restore(); // clear shadow
+    ctx.restore();
 
-    // Outline on body segments for definition
     ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
     ctx.lineWidth = 1;
     for (let i = snake.segments.length - 1; i >= 1; i--) {
@@ -648,7 +993,6 @@ export class GameRenderer {
       ctx.stroke();
     }
 
-    // Head
     const headSx = this.toScreenX(snake.headX);
     const headSy = this.toScreenY(snake.headY);
     const headSize = size * 1.3;
@@ -662,7 +1006,6 @@ export class GameRenderer {
       ctx.drawImage(this.headImage, -headSize / 2, -headSize / 2, headSize, headSize);
       ctx.restore();
     } else {
-      // Procedural head fallback
       ctx.save();
       ctx.translate(headSx, headSy);
       ctx.rotate(snake.angle - Math.PI / 2);
@@ -675,7 +1018,6 @@ export class GameRenderer {
       ctx.beginPath();
       ctx.ellipse(0, 0, hR, hR * 1.15, 0, 0, Math.PI * 2);
       ctx.fill();
-      // Eyes
       ctx.fillStyle = "#fff";
       ctx.beginPath();
       ctx.arc(-hR * 0.35, -hR * 0.5, hR * 0.22, 0, Math.PI * 2);
@@ -689,7 +1031,6 @@ export class GameRenderer {
       ctx.restore();
     }
 
-    // Boost glow
     if (snake.boosting && isMe) {
       const gradient = ctx.createRadialGradient(headSx, headSy, 0, headSx, headSy, headSize * 3);
       gradient.addColorStop(0, "rgba(255, 255, 100, 0.15)");
@@ -705,7 +1046,6 @@ export class GameRenderer {
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
     const size = this.getSnakeSize(snake);
-
     if (sx < -100 || sx > W + 100 || sy < -100 || sy > H + 100) return;
 
     ctx.font = "bold 13px Arial, sans-serif";
@@ -717,7 +1057,7 @@ export class GameRenderer {
     ctx.fillText(snake.name, sx, sy - size * 0.8);
   }
 
-  // ─── Food (glow + solid core) ─────────────────────
+  // ─── Food ─────────────────────────────────────────
 
   private drawFood(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const time = Date.now();
@@ -725,7 +1065,6 @@ export class GameRenderer {
     this.room.state.food.forEach((food: any) => {
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
-
       if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) return;
 
       const isDeath = food.size === 2;
@@ -736,14 +1075,12 @@ export class GameRenderer {
       const colorIdx = Math.abs(Math.floor(food.x * 7 + food.y * 13)) % FOOD_COLORS.length;
       const color = FOOD_COLORS[colorIdx];
 
-      // Glow halo
       ctx.globalAlpha = 0.3;
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(sx, sy, r * 2.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Solid core
       ctx.globalAlpha = 1.0;
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -758,7 +1095,6 @@ export class GameRenderer {
     const cx = this.toScreenX(0);
     const cy = this.toScreenY(0);
     const radius = this.arenaRadius;
-
     if (cx + radius < -100 || cx - radius > W + 100 || cy + radius < -100 || cy - radius > H + 100) return;
 
     ctx.strokeStyle = "rgba(255, 0, 68, 0.15)";
@@ -808,8 +1144,8 @@ export class GameRenderer {
 
     const centerX = mx + SIZE / 2;
     const centerY = my + SIZE / 2;
-
     const arenaR = this.arenaRadius * scale;
+
     ctx.strokeStyle = "rgba(255, 0, 68, 0.5)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -818,7 +1154,6 @@ export class GameRenderer {
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
-
       const dotX = centerX + snake.headX * scale;
       const dotY = centerY + snake.headY * scale;
 
@@ -858,6 +1193,7 @@ export class GameRenderer {
   destroy() {
     this.destroyed = true;
     cancelAnimationFrame(this.animFrame);
+    this.audio.destroy();
     this.room.leave();
     this.canvas.remove();
     if (this.joystickCanvas) {

@@ -9,4 +9,5 @@ html, body {
   touch-action: none;
   -webkit-overflow-scrolling: none;
   overscroll-behavior: none;
+  background: #0a0a1a;
 }
