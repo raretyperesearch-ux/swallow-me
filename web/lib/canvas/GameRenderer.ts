@@ -224,16 +224,36 @@ export class GameRenderer {
     this.animFrame = requestAnimationFrame(this.loop);
   };
 
+  private inputAngle: number = 0;
+
   private update() {
-    for (const [_id, snake] of this.localSnakes) {
+    // Compute current input angle for client-side prediction
+    const cx = this.canvas.width / 2;
+    const cy = this.canvas.height / 2;
+    this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
+
+    for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
 
-      // 1. Lerp head toward server position
-      snake.headX += (snake.serverHeadX - snake.headX) * 0.25;
-      snake.headY += (snake.serverHeadY - snake.headY) * 0.25;
+      const isMe = id === this.mySessionId;
+
+      if (isMe) {
+        // Client-side prediction: move head immediately based on input
+        const speed = snake.serverSpeed || 4.5;
+        snake.headX += Math.cos(this.inputAngle) * speed;
+        snake.headY += Math.sin(this.inputAngle) * speed;
+        // Correct toward server position
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.15;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.15;
+      } else {
+        // Other snakes: lerp toward server position
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.25;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.25;
+      }
 
       // 2. Smooth angle rotation
-      let angleDiff = snake.serverAngle - snake.angle;
+      const targetAngle = isMe ? this.inputAngle : snake.serverAngle;
+      let angleDiff = targetAngle - snake.angle;
       while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
       while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
       snake.angle += angleDiff * 0.2;
@@ -244,8 +264,8 @@ export class GameRenderer {
         snake.segments[0].y = snake.headY;
       }
 
-      // 4. Follow-the-leader: each segment chases the one ahead
-      // (ported from reference snake.js lines 70-77)
+      // 4. Follow-the-leader: each segment lerps toward the one ahead
+      const LERP_RATE = 0.35;
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
@@ -254,11 +274,8 @@ export class GameRenderer {
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         if (dist > SEGMENT_SPACING) {
-          // Double-averaging for smooth worm movement
-          curr.x = (curr.x + prev.x) / 2;
-          curr.y = (curr.y + prev.y) / 2;
-          curr.x = (curr.x + prev.x) / 2;
-          curr.y = (curr.y + prev.y) / 2;
+          curr.x += (prev.x - curr.x) * LERP_RATE;
+          curr.y += (prev.y - curr.y) * LERP_RATE;
         }
       }
 

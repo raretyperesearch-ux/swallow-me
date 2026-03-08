@@ -90,6 +90,7 @@ export function runGameTick(
         : GAME_CONFIG.FOOD_VALUE;
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
+      console.log(`[Eat] ${snake.name} ate ${food.size === 2 ? 'death' : 'normal'} food → length=${Math.floor(snake.length)}`);
     }
   }
 
