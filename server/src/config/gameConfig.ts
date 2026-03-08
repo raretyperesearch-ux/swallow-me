@@ -10,25 +10,25 @@ export const GAME_CONFIG = {
   BOUNDARY_KILL: true, // Die when hitting the wall
 
   // Snake movement
-  BASE_SPEED: 3.0, // Normal movement speed (units per tick)
-  BOOST_SPEED: 6.0, // Speed while boosting
-  TURN_RATE: 0.08, // Max radians per tick the snake can turn
-  BOOST_LENGTH_COST: 0.5, // Length units lost per tick while boosting
+  BASE_SPEED: 4.5, // Normal movement speed (units per tick)
+  BOOST_SPEED: 9.0, // Speed while boosting
+  TURN_RATE: 0.06, // Max radians per tick the snake can turn
+  BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 
   // Snake sizing
-  INITIAL_LENGTH: 10, // Starting snake length (segments)
+  INITIAL_LENGTH: 30, // Starting snake length (segments)
   MAX_LENGTH: 500, // Cap to prevent perf issues
-  SEGMENT_SPACING: 10, // Distance between body segments
-  HEAD_RADIUS: 12, // Collision radius of the head
-  BODY_RADIUS: 10, // Collision radius of body segments
+  SEGMENT_SPACING: 4, // Distance between body segments
+  HEAD_RADIUS: 14, // Collision radius of the head
+  BODY_RADIUS: 12, // Collision radius of body segments
 
   // Food
-  INITIAL_FOOD_COUNT: 300, // Food orbs at game start
-  MAX_FOOD: 500, // Cap on total food
-  FOOD_VALUE: 0.5, // Length gained per food eaten
-  DEATH_FOOD_COUNT: 15, // Food orbs dropped on death
-  FOOD_SPAWN_RATE: 2, // New food per second (natural spawning)
+  INITIAL_FOOD_COUNT: 500, // Food orbs at game start
+  MAX_FOOD: 800, // Cap on total food
+  FOOD_VALUE: 1.0, // Length gained per food eaten
+  DEATH_FOOD_COUNT: 25, // Food orbs dropped on death
+  FOOD_SPAWN_RATE: 3, // New food per second (natural spawning)
 
   // Lobby
   MIN_PLAYERS_TO_START: 3, // Real + bots needed

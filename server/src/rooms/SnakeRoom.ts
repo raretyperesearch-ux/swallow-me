@@ -327,8 +327,8 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       stateSnake.kills = snake.kills;
       stateSnake.valueUsdc = snake.valueUsdc;
 
-      // Sync segments (downsample for bandwidth — every Nth segment)
-      const downsample = Math.max(1, Math.floor(snake.segments.length / 50));
+      // Sync segments (every 2nd for long snakes, all for short ones)
+      const downsample = snake.segments.length > 100 ? 2 : 1;
       stateSnake.segments.clear();
       for (let i = 0; i < snake.segments.length; i += downsample) {
         const seg = new SnakeSegment();
