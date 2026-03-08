@@ -1,0 +1,373 @@
+import { Room, Client } from "colyseus";
+import { SnakeRoomState, SnakeEntity, SnakeSegment, FoodOrb, KillFeedEntry } from "./SnakeState";
+import { ServerSnake, createSnake } from "../game/Snake";
+import { ServerFood, spawnRandomFood } from "../game/Food";
+import { runGameTick } from "../game/GameLoop";
+import { KillEvent } from "../game/Physics";
+import { findSafeSpawn } from "../game/Arena";
+import { initBotState, removeBotState, getRandomBotName } from "../game/BotAI";
+import { GAME_CONFIG, TIER_CONFIG } from "../config/gameConfig";
+import { v4 as uuidv4 } from "uuid";
+
+export class SnakeRoom extends Room<SnakeRoomState> {
+  // Server-side state (not synced — full precision, per-room instance)
+  private serverSnakes = new Map<string, ServerSnake>();
+  private serverFoods = new Map<string, ServerFood>();
+
+  private gameInterval!: ReturnType<typeof setInterval>;
+  private syncInterval!: ReturnType<typeof setInterval>;
+  private botCheckInterval!: ReturnType<typeof setInterval>;
+  private tier: number = 1;
+  private botCounter: number = 0;
+
+  onCreate(options: { tier?: number }) {
+    this.tier = options.tier || 1;
+    const tierConfig = TIER_CONFIG[this.tier];
+    if (!tierConfig) throw new Error(`Invalid tier: ${this.tier}`);
+
+    this.maxClients = tierConfig.maxPlayers;
+    this.setState(new SnakeRoomState());
+    this.state.tier = this.tier;
+    this.state.arenaRadius = GAME_CONFIG.ARENA_RADIUS;
+
+    // Spawn initial food
+    for (let i = 0; i < GAME_CONFIG.INITIAL_FOOD_COUNT; i++) {
+      const food = spawnRandomFood(GAME_CONFIG.ARENA_RADIUS);
+      this.serverFoods.set(food.id, food);
+    }
+    this.syncFoodToState();
+
+    // Game loop — runs physics at TICK_RATE
+    this.gameInterval = setInterval(() => {
+      this.gameTick();
+    }, 1000 / GAME_CONFIG.TICK_RATE);
+
+    // State sync — push snake positions to clients at a lower rate
+    this.syncInterval = setInterval(() => {
+      this.syncSnakesToState();
+      this.updateCounts();
+    }, 1000 / GAME_CONFIG.CLIENT_SEND_RATE);
+
+    // Bot management
+    this.botCheckInterval = setInterval(() => {
+      this.manageBots();
+    }, 3000);
+
+    // Handle player input
+    this.onMessage("input", (client, data: { angle: number; boost: boolean }) => {
+      const snake = this.serverSnakes.get(client.sessionId);
+      if (snake && snake.alive) {
+        snake.targetAngle = data.angle;
+        snake.boosting = data.boost;
+        snake.lastInputTime = Date.now();
+      }
+    });
+
+    // Handle cashout request
+    this.onMessage("cashout", (client) => {
+      this.handleCashout(client);
+    });
+
+    console.log(`[SnakeRoom] Created tier $${this.tier} room: ${this.roomId}`);
+  }
+
+  async onJoin(client: Client, options: { wallet?: string; name?: string }) {
+    const wallet = options.wallet || "unknown";
+    const name = options.name || `player_${client.sessionId.slice(0, 6)}`;
+    const tierConfig = TIER_CONFIG[this.tier];
+
+    console.log(`[SnakeRoom] ${name} joined (${client.sessionId})`);
+
+    // TODO: Verify USDC deposit on-chain before spawning
+    // For Phase 1 (no money), skip verification
+
+    const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
+    const snake = createSnake(
+      client.sessionId,
+      name,
+      wallet,
+      spawn.x,
+      spawn.y,
+      tierConfig.entryAmount,
+      false,
+      Math.floor(Math.random() * 10) // random skin
+    );
+
+    this.serverSnakes.set(client.sessionId, snake);
+    this.updateCounts();
+  }
+
+  onLeave(client: Client, consented: boolean) {
+    const snake = this.serverSnakes.get(client.sessionId);
+    if (snake && snake.alive) {
+      // Treat disconnect as death — forfeit value
+      snake.alive = false;
+      console.log(`[SnakeRoom] ${snake.name} left (forfeited $${snake.valueUsdc / 1_000_000})`);
+
+      // TODO: Call forfeit on-chain (rake the remaining value)
+      // For Phase 1, just remove
+    }
+
+    this.serverSnakes.delete(client.sessionId);
+    this.state.snakes.delete(client.sessionId);
+    this.updateCounts();
+  }
+
+  onDispose() {
+    clearInterval(this.gameInterval);
+    clearInterval(this.syncInterval);
+    clearInterval(this.botCheckInterval);
+
+    // Clean up bot states
+    for (const [id, snake] of this.serverSnakes) {
+      if (snake.isBot) removeBotState(id);
+    }
+    this.serverSnakes.clear();
+    this.serverFoods.clear();
+
+    console.log(`[SnakeRoom] Disposed tier $${this.tier} room: ${this.roomId}`);
+  }
+
+  // ─── Game Loop ─────────────────────────────────────────
+
+  private gameTick() {
+    runGameTick(this.serverSnakes, this.serverFoods, GAME_CONFIG.ARENA_RADIUS, {
+      onKill: (event) => this.handleKill(event),
+      onBoostFoodDrop: (x, y) => {
+        const food: ServerFood = { id: uuidv4(), x, y, size: 1 };
+        this.serverFoods.set(food.id, food);
+      },
+    });
+  }
+
+  // ─── Kill Handler ──────────────────────────────────────
+
+  private handleKill(event: KillEvent) {
+    const victim = this.serverSnakes.get(event.victim);
+    if (!victim) return;
+
+    const tierConfig = TIER_CONFIG[this.tier];
+    const rakeAmount = Math.floor(event.victimValue * tierConfig.rakeBps / 10000);
+    const payoutAmount = event.victimValue - rakeAmount;
+
+    if (event.killer) {
+      const killer = this.serverSnakes.get(event.killer);
+      if (killer && killer.alive) {
+        // Credit killer with payout
+        killer.valueUsdc += payoutAmount;
+        console.log(
+          `[Kill] ${killer.name} swallowed ${victim.name} → +$${(payoutAmount / 1_000_000).toFixed(2)} (rake: $${(rakeAmount / 1_000_000).toFixed(2)})`
+        );
+
+        // TODO: Call settle_kill on-chain
+      }
+    } else {
+      console.log(
+        `[Kill] ${victim.name} hit the wall → forfeited $${(event.victimValue / 1_000_000).toFixed(2)}`
+      );
+      // TODO: Call forfeit on-chain
+    }
+
+    // Add to kill feed
+    const entry = new KillFeedEntry();
+    entry.killerName = event.killerName || "Wall";
+    entry.victimName = event.victimName;
+    entry.amount = payoutAmount / 1_000_000;
+    entry.timestamp = event.timestamp;
+    this.state.killFeed.push(entry);
+
+    // Keep kill feed to last 10 entries
+    while (this.state.killFeed.length > 10) {
+      this.state.killFeed.shift();
+    }
+
+    // Remove dead snake from synced state
+    this.state.snakes.delete(event.victim);
+
+    // Sync food after death drops
+    this.syncFoodToState();
+
+    // Notify the killed client
+    const victimClient = this.clients.find((c) => c.sessionId === event.victim);
+    if (victimClient) {
+      victimClient.send("death", {
+        killerName: event.killerName || "Wall",
+        valueUsdc: event.victimValue,
+        duration: Date.now() - (victim.spawnTime || Date.now()),
+        kills: victim.kills,
+      });
+    }
+  }
+
+  // ─── Cashout Handler ───────────────────────────────────
+
+  private handleCashout(client: Client) {
+    const snake = this.serverSnakes.get(client.sessionId);
+    if (!snake || !snake.alive) {
+      client.send("cashout_error", { message: "Not alive" });
+      return;
+    }
+
+    console.log(
+      `[Cashout] ${snake.name} cashing out $${(snake.valueUsdc / 1_000_000).toFixed(2)}`
+    );
+
+    // TODO: Call cashout on-chain
+    // For Phase 1, just remove the snake
+
+    snake.alive = false;
+    this.serverSnakes.delete(client.sessionId);
+    this.state.snakes.delete(client.sessionId);
+    this.updateCounts();
+
+    client.send("cashout_success", {
+      amount: snake.valueUsdc,
+      kills: snake.kills,
+      duration: Date.now() - snake.spawnTime,
+    });
+  }
+
+  // ─── Bot Management ────────────────────────────────────
+
+  private manageBots() {
+    const realPlayerCount = Array.from(this.serverSnakes.values()).filter(
+      (s) => !s.isBot && s.alive
+    ).length;
+    const aliveBotsCount = Array.from(this.serverSnakes.values()).filter(
+      (s) => s.isBot && s.alive
+    ).length;
+    const totalAlive = realPlayerCount + aliveBotsCount;
+
+    // Fill to target if we have at least 1 real player
+    if (realPlayerCount >= 1 && totalAlive < GAME_CONFIG.BOT_FILL_TARGET) {
+      const botsNeeded = GAME_CONFIG.BOT_FILL_TARGET - totalAlive;
+      for (let i = 0; i < botsNeeded; i++) {
+        this.spawnBot();
+      }
+    }
+
+    // If lots of real players, remove excess bots
+    if (realPlayerCount >= GAME_CONFIG.BOT_FILL_TARGET) {
+      // Kill off bots gradually
+      for (const [id, snake] of this.serverSnakes) {
+        if (snake.isBot && snake.alive && Math.random() < 0.3) {
+          snake.alive = false;
+          this.serverSnakes.delete(id);
+          this.state.snakes.delete(id);
+          removeBotState(id);
+          break; // One at a time
+        }
+      }
+    }
+
+    // Randomly kill bots occasionally so new ones spawn (keeps things dynamic)
+    if (aliveBotsCount > 2 && Math.random() < 0.15) {
+      const bots = Array.from(this.serverSnakes.entries()).filter(
+        ([, s]) => s.isBot && s.alive
+      );
+      if (bots.length > 0) {
+        const [botId, bot] = bots[Math.floor(Math.random() * bots.length)];
+        bot.alive = false;
+        // Drop food where bot died
+        this.handleKill({
+          killer: null,
+          victim: botId,
+          victimValue: bot.valueUsdc,
+          victimName: bot.name,
+          killerName: "timeout",
+          timestamp: Date.now(),
+        });
+      }
+    }
+  }
+
+  private spawnBot() {
+    const botId = `bot_${++this.botCounter}_${uuidv4().slice(0, 8)}`;
+    const tierConfig = TIER_CONFIG[this.tier];
+    const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
+
+    const bot = createSnake(
+      botId,
+      getRandomBotName(),
+      "bot",
+      spawn.x,
+      spawn.y,
+      tierConfig.entryAmount,
+      true,
+      Math.floor(Math.random() * 10)
+    );
+
+    this.serverSnakes.set(botId, bot);
+    initBotState(botId);
+  }
+
+  // ─── State Sync ────────────────────────────────────────
+
+  private syncSnakesToState() {
+    for (const [id, snake] of this.serverSnakes) {
+      if (!snake.alive) continue;
+
+      let stateSnake = this.state.snakes.get(id);
+      if (!stateSnake) {
+        stateSnake = new SnakeEntity();
+        stateSnake.id = id;
+        stateSnake.name = snake.name;
+        stateSnake.isBot = snake.isBot;
+        stateSnake.skinId = snake.skinId;
+        this.state.snakes.set(id, stateSnake);
+      }
+
+      stateSnake.headX = snake.headX;
+      stateSnake.headY = snake.headY;
+      stateSnake.angle = snake.angle;
+      stateSnake.speed = snake.speed;
+      stateSnake.boosting = snake.boosting;
+      stateSnake.length = Math.floor(snake.length);
+      stateSnake.alive = snake.alive;
+      stateSnake.kills = snake.kills;
+      stateSnake.valueUsdc = snake.valueUsdc;
+
+      // Sync segments (downsample for bandwidth — every Nth segment)
+      const downsample = Math.max(1, Math.floor(snake.segments.length / 50));
+      stateSnake.segments.clear();
+      for (let i = 0; i < snake.segments.length; i += downsample) {
+        const seg = new SnakeSegment();
+        seg.x = snake.segments[i].x;
+        seg.y = snake.segments[i].y;
+        stateSnake.segments.push(seg);
+      }
+    }
+
+    // Remove dead snakes from state
+    for (const [id] of this.state.snakes) {
+      const server = this.serverSnakes.get(id);
+      if (!server || !server.alive) {
+        this.state.snakes.delete(id);
+      }
+    }
+  }
+
+  private syncFoodToState() {
+    // Full food sync (can be optimized later with spatial partitioning)
+    this.state.food.clear();
+    for (const [id, food] of this.serverFoods) {
+      const stateFood = new FoodOrb();
+      stateFood.id = id;
+      stateFood.x = food.x;
+      stateFood.y = food.y;
+      stateFood.size = food.size;
+      this.state.food.set(id, stateFood);
+    }
+  }
+
+  private updateCounts() {
+    let players = 0;
+    let alive = 0;
+    for (const [, snake] of this.serverSnakes) {
+      if (!snake.isBot) players++;
+      if (snake.alive) alive++;
+    }
+    this.state.playerCount = players;
+    this.state.aliveCount = alive;
+  }
+}

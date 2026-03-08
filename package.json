@@ -1,0 +1,5 @@
+{
+  "name": "swallow-me",
+  "private": true,
+  "workspaces": ["server", "web"]
+}
