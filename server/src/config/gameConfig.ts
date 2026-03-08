@@ -12,7 +12,7 @@ export const GAME_CONFIG = {
   // Snake movement
   BASE_SPEED: 4.5, // Normal movement speed (units per tick)
   BOOST_SPEED: 9.0, // Speed while boosting
-  TURN_RATE: 0.06, // Max radians per tick the snake can turn
+  TURN_RATE: 0.04, // Max radians per tick the snake can turn (wide arcs)
   BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 

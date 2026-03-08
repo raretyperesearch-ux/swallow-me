@@ -36,6 +36,14 @@ const FOOD_COLORS = [
 
 const NUM_BODY_SKINS = 13;
 
+// Skin colors for minimap dots
+const SKIN_COLORS = [
+  "#FF4444", "#44FF44", "#4444FF", "#FFFF44",
+  "#FF44FF", "#44FFFF", "#FF8844", "#88FF44",
+  "#4488FF", "#FF4488", "#44FF88", "#8844FF",
+  "#FFAA44",
+];
+
 // ─── GameRenderer ───────────────────────────────────
 
 export class GameRenderer {
@@ -65,6 +73,24 @@ export class GameRenderer {
   private mouseY: number = 0;
   private mouseDown: boolean = false;
   private inputThrottle: number = 0;
+  private inputAngle: number = 0;
+
+  // Mobile joystick
+  private isTouchDevice: boolean = false;
+  private joystickActive: boolean = false;
+  private joystickCenterX: number = 0;
+  private joystickCenterY: number = 0;
+  private joystickKnobX: number = 0;
+  private joystickKnobY: number = 0;
+  private joystickTouchId: number | null = null;
+  private joystickCanvas: HTMLCanvasElement | null = null;
+  private joystickCtx: CanvasRenderingContext2D | null = null;
+
+  // Joystick config
+  private readonly JOYSTICK_OUTER_R = 60;
+  private readonly JOYSTICK_INNER_R = 25;
+  private readonly JOYSTICK_MARGIN = 40;
+  private readonly BOOST_THRESHOLD = 0.7; // distance ratio to trigger boost
 
   // Callbacks
   public onDeath?: (data: any) => void;
@@ -82,9 +108,19 @@ export class GameRenderer {
     container.appendChild(this.canvas);
     this.ctx = this.canvas.getContext("2d")!;
 
+    // Detect touch device
+    this.isTouchDevice =
+      navigator.maxTouchPoints > 0 ||
+      "ontouchstart" in window;
+
     this.loadAssets();
     this.setupListeners();
     this.setupInput();
+
+    if (this.isTouchDevice) {
+      this.setupJoystick(container);
+    }
+
     this.loop();
   }
 
@@ -179,29 +215,198 @@ export class GameRenderer {
     window.addEventListener("resize", () => {
       this.canvas.width = window.innerWidth;
       this.canvas.height = window.innerHeight;
+      if (this.joystickCanvas) {
+        this.joystickCanvas.width = window.innerWidth;
+        this.joystickCanvas.height = window.innerHeight;
+        this.updateJoystickCenter();
+      }
     });
 
+    // Desktop mouse controls
     this.canvas.addEventListener("mousemove", (e) => {
+      if (this.isTouchDevice) return;
       this.mouseX = e.clientX;
       this.mouseY = e.clientY;
       this.sendInput();
     });
-    this.canvas.addEventListener("mousedown", () => { this.mouseDown = true; this.sendInput(); });
-    this.canvas.addEventListener("mouseup", () => { this.mouseDown = false; this.sendInput(); });
-
-    this.canvas.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-      this.mouseX = e.touches[0].clientX;
-      this.mouseY = e.touches[0].clientY;
-      this.sendInput();
-    }, { passive: false });
-    this.canvas.addEventListener("touchstart", (e) => {
+    this.canvas.addEventListener("mousedown", () => {
+      if (this.isTouchDevice) return;
       this.mouseDown = true;
-      this.mouseX = e.touches[0].clientX;
-      this.mouseY = e.touches[0].clientY;
       this.sendInput();
     });
-    this.canvas.addEventListener("touchend", () => { this.mouseDown = false; this.sendInput(); });
+    this.canvas.addEventListener("mouseup", () => {
+      if (this.isTouchDevice) return;
+      this.mouseDown = false;
+      this.sendInput();
+    });
+
+    // Touch controls on game canvas (non-joystick touches for looking around)
+    // Only used if NOT a touch device (joystick handles touch input)
+    if (!this.isTouchDevice) {
+      this.canvas.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        this.mouseX = e.touches[0].clientX;
+        this.mouseY = e.touches[0].clientY;
+        this.sendInput();
+      }, { passive: false });
+      this.canvas.addEventListener("touchstart", (e) => {
+        this.mouseDown = true;
+        this.mouseX = e.touches[0].clientX;
+        this.mouseY = e.touches[0].clientY;
+        this.sendInput();
+      });
+      this.canvas.addEventListener("touchend", () => { this.mouseDown = false; this.sendInput(); });
+    }
+  }
+
+  // ─── Mobile Joystick ──────────────────────────────
+
+  private setupJoystick(container: HTMLDivElement) {
+    // Create overlay canvas for joystick
+    this.joystickCanvas = document.createElement("canvas");
+    this.joystickCanvas.width = window.innerWidth;
+    this.joystickCanvas.height = window.innerHeight;
+    this.joystickCanvas.style.position = "absolute";
+    this.joystickCanvas.style.top = "0";
+    this.joystickCanvas.style.left = "0";
+    this.joystickCanvas.style.pointerEvents = "auto";
+    this.joystickCanvas.style.zIndex = "10";
+    container.appendChild(this.joystickCanvas);
+    this.joystickCtx = this.joystickCanvas.getContext("2d")!;
+
+    this.updateJoystickCenter();
+
+    // Joystick touch handlers
+    this.joystickCanvas.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        const dx = touch.clientX - this.joystickCenterX;
+        const dy = touch.clientY - this.joystickCenterY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // If touch is near the joystick area, capture it
+        if (dist < this.JOYSTICK_OUTER_R * 2.5) {
+          this.joystickTouchId = touch.identifier;
+          this.joystickActive = true;
+          this.updateJoystickKnob(touch.clientX, touch.clientY);
+          return;
+        }
+      }
+
+      // Any other touch on screen = direction (use center-of-screen angle)
+      const touch = e.changedTouches[0];
+      this.mouseX = touch.clientX;
+      this.mouseY = touch.clientY;
+      this.sendDesktopStyleInput();
+    }, { passive: false });
+
+    this.joystickCanvas.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === this.joystickTouchId) {
+          this.updateJoystickKnob(touch.clientX, touch.clientY);
+          return;
+        }
+      }
+    }, { passive: false });
+
+    this.joystickCanvas.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === this.joystickTouchId) {
+          this.joystickActive = false;
+          this.joystickTouchId = null;
+          this.joystickKnobX = this.joystickCenterX;
+          this.joystickKnobY = this.joystickCenterY;
+          this.mouseDown = false;
+          this.sendInput();
+          return;
+        }
+      }
+    }, { passive: false });
+
+    this.joystickCanvas.addEventListener("touchcancel", (e) => {
+      this.joystickActive = false;
+      this.joystickTouchId = null;
+      this.joystickKnobX = this.joystickCenterX;
+      this.joystickKnobY = this.joystickCenterY;
+      this.mouseDown = false;
+    });
+  }
+
+  private updateJoystickCenter() {
+    this.joystickCenterX = this.JOYSTICK_MARGIN + this.JOYSTICK_OUTER_R;
+    this.joystickCenterY = window.innerHeight - this.JOYSTICK_MARGIN - this.JOYSTICK_OUTER_R;
+    this.joystickKnobX = this.joystickCenterX;
+    this.joystickKnobY = this.joystickCenterY;
+  }
+
+  private updateJoystickKnob(touchX: number, touchY: number) {
+    const dx = touchX - this.joystickCenterX;
+    const dy = touchY - this.joystickCenterY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const maxDist = this.JOYSTICK_OUTER_R;
+
+    if (dist > maxDist) {
+      // Clamp to outer ring
+      this.joystickKnobX = this.joystickCenterX + (dx / dist) * maxDist;
+      this.joystickKnobY = this.joystickCenterY + (dy / dist) * maxDist;
+    } else {
+      this.joystickKnobX = touchX;
+      this.joystickKnobY = touchY;
+    }
+
+    // Calculate angle and boost
+    const normalizedDist = Math.min(dist, maxDist) / maxDist;
+    if (normalizedDist > 0.1) {
+      this.inputAngle = Math.atan2(dy, dx);
+      this.mouseDown = normalizedDist > this.BOOST_THRESHOLD;
+      this.sendJoystickInput();
+    }
+  }
+
+  private sendJoystickInput() {
+    const now = Date.now();
+    if (now < this.inputThrottle) return;
+    this.inputThrottle = now + 33;
+    this.room.send("input", { angle: this.inputAngle, boost: this.mouseDown });
+  }
+
+  private sendDesktopStyleInput() {
+    const cx = this.canvas.width / 2;
+    const cy = this.canvas.height / 2;
+    const angle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
+    this.room.send("input", { angle, boost: false });
+  }
+
+  private drawJoystick() {
+    if (!this.joystickCtx || !this.joystickCanvas) return;
+    const ctx = this.joystickCtx;
+    ctx.clearRect(0, 0, this.joystickCanvas.width, this.joystickCanvas.height);
+
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(this.joystickCenterX, this.joystickCenterY, this.JOYSTICK_OUTER_R, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Inner knob
+    const knobColor = this.joystickActive
+      ? (this.mouseDown ? "rgba(100, 255, 100, 0.6)" : "rgba(255, 255, 255, 0.5)")
+      : "rgba(255, 255, 255, 0.3)";
+    ctx.beginPath();
+    ctx.arc(this.joystickKnobX, this.joystickKnobY, this.JOYSTICK_INNER_R, 0, Math.PI * 2);
+    ctx.fillStyle = knobColor;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   private sendInput() {
@@ -221,16 +426,18 @@ export class GameRenderer {
     if (this.destroyed) return;
     this.update();
     this.draw();
+    if (this.isTouchDevice) this.drawJoystick();
     this.animFrame = requestAnimationFrame(this.loop);
   };
 
-  private inputAngle: number = 0;
-
   private update() {
     // Compute current input angle for client-side prediction
-    const cx = this.canvas.width / 2;
-    const cy = this.canvas.height / 2;
-    this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
+    if (!this.isTouchDevice || !this.joystickActive) {
+      const cx = this.canvas.width / 2;
+      const cy = this.canvas.height / 2;
+      this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
+    }
+    // If joystick is active, inputAngle is already set by updateJoystickKnob
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
@@ -251,12 +458,12 @@ export class GameRenderer {
         snake.headY += (snake.serverHeadY - snake.headY) * 0.25;
       }
 
-      // 2. Smooth angle rotation
+      // 2. Smooth angle rotation — lerp at 0.15 for satisfying wide arcs
       const targetAngle = isMe ? this.inputAngle : snake.serverAngle;
       let angleDiff = targetAngle - snake.angle;
       while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
       while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-      snake.angle += angleDiff * 0.2;
+      snake.angle += angleDiff * 0.15;
 
       // 3. Set first segment to head
       if (snake.segments.length > 0) {
@@ -349,6 +556,9 @@ export class GameRenderer {
         this.drawSnakeName(ctx, snake, W, H);
       }
     }
+
+    // Minimap (drawn last, on top of everything)
+    this.drawMinimap(ctx, W, H);
   }
 
   // ─── Helpers ──────────────────────────────────────
@@ -491,6 +701,85 @@ export class GameRenderer {
     ctx.stroke();
   }
 
+  // ─── Minimap ──────────────────────────────────────
+
+  private drawMinimap(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const SIZE = 200;
+    const PADDING = 15;
+    const mx = W - SIZE - PADDING;
+    const my = H - SIZE - PADDING;
+    const scale = (SIZE - 20) / (this.arenaRadius * 2); // map world coords to minimap
+
+    // Background with rounded corners
+    ctx.save();
+    const r = 12;
+    ctx.beginPath();
+    ctx.moveTo(mx + r, my);
+    ctx.lineTo(mx + SIZE - r, my);
+    ctx.quadraticCurveTo(mx + SIZE, my, mx + SIZE, my + r);
+    ctx.lineTo(mx + SIZE, my + SIZE - r);
+    ctx.quadraticCurveTo(mx + SIZE, my + SIZE, mx + SIZE - r, my + SIZE);
+    ctx.lineTo(mx + r, my + SIZE);
+    ctx.quadraticCurveTo(mx, my + SIZE, mx, my + SIZE - r);
+    ctx.lineTo(mx, my + r);
+    ctx.quadraticCurveTo(mx, my, mx + r, my);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fill();
+    ctx.clip();
+
+    // Arena center on minimap
+    const centerX = mx + SIZE / 2;
+    const centerY = my + SIZE / 2;
+
+    // Arena boundary circle (red)
+    const arenaR = this.arenaRadius * scale;
+    ctx.strokeStyle = "rgba(255, 0, 68, 0.5)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, arenaR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Draw all snake dots
+    for (const [id, snake] of this.localSnakes) {
+      if (!snake.alive) continue;
+
+      const dotX = centerX + snake.headX * scale;
+      const dotY = centerY + snake.headY * scale;
+
+      // Determine color
+      let color: string;
+      let dotSize: number;
+
+      if (id === this.mySessionId) {
+        color = "#00FF66";
+        dotSize = 4;
+      } else if (snake.isBot) {
+        color = "#888888";
+        dotSize = 2.5;
+      } else {
+        color = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
+        dotSize = 3;
+      }
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, dotSize, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Extra glow for self
+      if (id === this.mySessionId) {
+        ctx.strokeStyle = "rgba(0, 255, 102, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, dotSize + 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+
   // ─── Cleanup ──────────────────────────────────────
 
   destroy() {
@@ -498,5 +787,8 @@ export class GameRenderer {
     cancelAnimationFrame(this.animFrame);
     this.room.leave();
     this.canvas.remove();
+    if (this.joystickCanvas) {
+      this.joystickCanvas.remove();
+    }
   }
 }
