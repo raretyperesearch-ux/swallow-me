@@ -948,11 +948,11 @@ export class GameRenderer {
 
     this.drawMinimap(ctx, W, H);
 
-    // FPS counter (top-left, below HUD)
+    // FPS counter (top-left corner, small gray text)
     ctx.font = "11px monospace";
     ctx.textAlign = "left";
     ctx.fillStyle = this.fps >= 50 ? "rgba(100,255,100,0.6)" : "rgba(255,100,100,0.8)";
-    ctx.fillText(`${this.fps} FPS`, 15, H - 10);
+    ctx.fillText(`${this.fps} FPS`, 15, 80);
   }
 
   // ─── Coordinate helpers ───────────────────────────
@@ -976,7 +976,25 @@ export class GameRenderer {
     const skinColor = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
     const r = size / 2;
 
-    // Body segments — single pass, no shadows (perf)
+    // Body segments — faked glow pass + solid pass (no shadowBlur)
+    // Glow pass: semi-transparent larger circles behind body
+    if (!bodyImg || !bodyImg.complete) {
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = skinColor;
+      ctx.beginPath();
+      for (let i = snake.segments.length - 1; i >= 1; i--) {
+        const seg = snake.segments[i];
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        if (sx < -size * 2 || sx > W + size * 2 || sy < -size * 2 || sy > H + size * 2) continue;
+        ctx.moveTo(sx + r * 1.8, sy);
+        ctx.arc(sx, sy, r * 1.8, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    }
+
+    // Solid body pass
     for (let i = snake.segments.length - 1; i >= 1; i--) {
       const seg = snake.segments[i];
       const sx = this.toScreenX(seg.x);
@@ -1058,11 +1076,16 @@ export class GameRenderer {
 
   private drawFood(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const time = Date.now();
+    const margin = 30;
+
+    // Batch food by color — one path per color reduces state changes
+    const glowBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
+    const solidBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
 
     this.room.state.food.forEach((food: any) => {
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
-      if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) return;
+      if (sx < -margin || sx > W + margin || sy < -margin || sy > H + margin) return;
 
       const isDeath = food.size === 2;
       const baseSize = isDeath ? 8 : 4;
@@ -1072,18 +1095,36 @@ export class GameRenderer {
       const colorIdx = Math.abs(Math.floor(food.x * 7 + food.y * 13)) % FOOD_COLORS.length;
       const color = FOOD_COLORS[colorIdx];
 
-      ctx.globalAlpha = 0.3;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r * 2.5, 0, Math.PI * 2);
-      ctx.fill();
+      if (!glowBatches.has(color)) glowBatches.set(color, []);
+      glowBatches.get(color)!.push({ sx, sy, r: r * 2.5 });
 
-      ctx.globalAlpha = 1.0;
+      if (!solidBatches.has(color)) solidBatches.set(color, []);
+      solidBatches.get(color)!.push({ sx, sy, r });
+    });
+
+    // Draw all glow halos (batched by color)
+    ctx.globalAlpha = 0.2;
+    for (const [color, items] of glowBatches) {
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      for (const item of items) {
+        ctx.moveTo(item.sx + item.r, item.sy);
+        ctx.arc(item.sx, item.sy, item.r, 0, Math.PI * 2);
+      }
       ctx.fill();
-    });
+    }
+
+    // Draw all solid food (batched by color)
+    ctx.globalAlpha = 1.0;
+    for (const [color, items] of solidBatches) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      for (const item of items) {
+        ctx.moveTo(item.sx + item.r, item.sy);
+        ctx.arc(item.sx, item.sy, item.r, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
   }
 
   // ─── Boundary ─────────────────────────────────────
