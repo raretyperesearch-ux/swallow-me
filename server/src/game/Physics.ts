@@ -23,13 +23,14 @@ function distanceSq(x1: number, y1: number, x2: number, y2: number): number {
   return dx * dx + dy * dy;
 }
 
-// Reusable spatial grids (avoid per-tick allocation)
+// Reusable spatial grids
 const bodyGrid = new SpatialGrid(300);
 const foodGrid = new SpatialGrid(300);
 
 /**
- * Check all head-to-body collisions between snakes using spatial grid.
- * O(n) average instead of O(n²).
+ * Check all head-to-body collisions between snakes.
+ * Uses spatial grid for broad phase, then precise per-segment check.
+ * Collision threshold is generous (1.8x) — better to kill too easily than not at all.
  */
 export function checkSnakeCollisions(
   snakes: Map<string, ServerSnake>
@@ -37,25 +38,26 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // Build spatial grid of all body segments
+  // BROAD PHASE: Build spatial grid of all body segments (skip head area, stride 2 for density)
   bodyGrid.clear();
   for (const [id, snake] of snakes) {
     if (!snake.alive) continue;
-    // Insert body segments into grid (skip first 3 — head area)
-    // Use stride of 3 for dense coverage without inserting every single segment
-    for (let i = 3; i < snake.segments.length; i += 3) {
+    for (let i = 3; i < snake.segments.length; i += 2) {
       bodyGrid.insert(id, snake.segments[i].x, snake.segments[i].y);
     }
   }
 
-  // Check each snake's head against nearby body segments
+  // NARROW PHASE: For each snake's head, check against nearby snakes' body segments
+  const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.8;
+  const collisionDistSq = collisionDist * collisionDist;
+
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
 
     const headX = snake.headX;
     const headY = snake.headY;
 
-    // Get snake IDs that have body segments near this head
+    // Get IDs of snakes that have body segments near this head
     const nearbyIds = bodyGrid.getNearby(headX, headY);
 
     for (const otherId of nearbyIds) {
@@ -63,16 +65,14 @@ export function checkSnakeCollisions(
       const other = snakes.get(otherId);
       if (!other || !other.alive) continue;
 
-      // Now do precise check against this snake's body segments
-      const startSeg = 3;
-      const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.5;
-      const collisionDistSq = collisionDist * collisionDist;
-
-      for (let i = startSeg; i < other.segments.length; i++) {
+      // Precise check: iterate ALL body segments (skip first 3 = head area)
+      for (let i = 3; i < other.segments.length; i++) {
         const seg = other.segments[i];
         const dSq = distanceSq(headX, headY, seg.x, seg.y);
 
         if (dSq < collisionDistSq) {
+          const dist = Math.sqrt(dSq);
+          console.log(`[KILL] ${other.name} killed ${snake.name} at distance ${dist.toFixed(1)} (threshold ${collisionDist.toFixed(1)}, seg ${i}/${other.segments.length})`);
           kills.push({
             killer: otherId,
             victim: id,
@@ -100,9 +100,10 @@ export function checkSnakeCollisions(
       const [idB, b] = heads[j];
       if (alreadyDead.has(idA) || alreadyDead.has(idB)) continue;
 
-      const collisionDist = GAME_CONFIG.HEAD_RADIUS * 2;
+      const headCollDist = GAME_CONFIG.HEAD_RADIUS * 2;
       const dSq = distanceSq(a.headX, a.headY, b.headX, b.headY);
-      if (dSq < collisionDist * collisionDist) {
+      if (dSq < headCollDist * headCollDist) {
+        console.log(`[KILL] Head-to-head: ${a.name} vs ${b.name}`);
         kills.push({
           killer: null,
           victim: idA,
@@ -160,13 +161,15 @@ export function checkBoundaryCollisions(
 }
 
 /**
- * Check snake heads vs food orbs using spatial grid.
+ * Check snake heads vs food orbs.
+ * Eat radius = HEAD_RADIUS * 3 — very generous.
  */
 export function checkFoodCollisions(
   snakes: Map<string, ServerSnake>,
   foods: Map<string, ServerFood>
 ): FoodEatEvent[] {
   const eats: FoodEatEvent[] = [];
+  const eaten = new Set<string>(); // prevent double-eat in same tick
 
   // Build food grid
   foodGrid.clear();
@@ -174,24 +177,24 @@ export function checkFoodCollisions(
     foodGrid.insert(foodId, food.x, food.y);
   }
 
+  const eatDist = GAME_CONFIG.HEAD_RADIUS * 3;
+  const eatDistSq = eatDist * eatDist;
+
   for (const [snakeId, snake] of snakes) {
     if (!snake.alive) continue;
 
-    // Only check food near this snake's head
     const nearbyFoodIds = foodGrid.getNearby(snake.headX, snake.headY);
 
     for (const foodId of nearbyFoodIds) {
+      if (eaten.has(foodId)) continue;
       const food = foods.get(foodId);
       if (!food) continue;
 
-      const isDeath = food.size === 2;
-      const eatDist = isDeath
-        ? GAME_CONFIG.HEAD_RADIUS * 3
-        : GAME_CONFIG.HEAD_RADIUS * 2.5;
       const dSq = distanceSq(snake.headX, snake.headY, food.x, food.y);
 
-      if (dSq < eatDist * eatDist) {
+      if (dSq < eatDistSq) {
         eats.push({ snakeId, foodId });
+        eaten.add(foodId);
       }
     }
   }

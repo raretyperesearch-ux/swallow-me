@@ -2,29 +2,29 @@
 
 export const GAME_CONFIG = {
   // Tick rate
-  TICK_RATE: 30, // Server physics updates per second (down from 60 — client interpolates)
+  TICK_RATE: 30, // Server physics updates per second
   CLIENT_SEND_RATE: 15, // State sync pushes per second
 
   // Arena
-  ARENA_RADIUS: 5000, // Circular map radius in game units (bigger for 100 players)
+  ARENA_RADIUS: 5000, // Circular map radius in game units
   BOUNDARY_KILL: true, // Die when hitting the wall
 
-  // Snake movement (adjusted for 30Hz tick — same effective speed)
-  BASE_SPEED: 9.0, // Normal movement speed (units per tick) — doubled for 30Hz
-  BOOST_SPEED: 18.0, // Speed while boosting — doubled for 30Hz
-  TURN_RATE: 0.08, // Max radians per tick — doubled for 30Hz
-  BOOST_LENGTH_COST: 0.6, // Length units lost per tick while boosting — doubled for 30Hz
+  // Snake movement (tuned for 30Hz — smooth, not snappy)
+  BASE_SPEED: 4.0, // Normal movement speed (units per tick)
+  BOOST_SPEED: 8.0, // Speed while boosting
+  TURN_RATE: 0.04, // Max radians per tick (slow smooth turns)
+  BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 
   // Snake sizing
-  INITIAL_LENGTH: 50, // Starting snake length (segments)
+  INITIAL_LENGTH: 40, // Starting snake length (segments)
   MAX_LENGTH: 500, // Cap to prevent perf issues
   SEGMENT_SPACING: 4, // Distance between body segments
   HEAD_RADIUS: 14, // Collision radius of the head
   BODY_RADIUS: 12, // Collision radius of body segments
 
   // Food
-  INITIAL_FOOD_COUNT: 1000, // Food orbs at game start (more for bigger map)
+  INITIAL_FOOD_COUNT: 1000, // Food orbs at game start
   MAX_FOOD: 2000, // Cap on total food
   FOOD_VALUE: 1.0, // Length gained per food eaten
   DEATH_FOOD_COUNT: 25, // Food orbs dropped on death

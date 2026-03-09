@@ -27,7 +27,7 @@ interface DeathParticle {
   vx: number;
   vy: number;
   color: string;
-  life: number; // 0..1, starts at 1
+  life: number;
   size: number;
 }
 
@@ -47,12 +47,26 @@ const FOOD_COLORS = [
 
 const NUM_BODY_SKINS = 13;
 
-const SKIN_COLORS = [
-  "#FF4444", "#44FF44", "#4444FF", "#FFFF44",
-  "#FF44FF", "#44FFFF", "#FF8844", "#88FF44",
-  "#4488FF", "#FF4488", "#44FF88", "#8844FF",
-  "#FFAA44",
+// Multi-color skin palettes for alternating body bands
+const SKIN_PALETTES: string[][] = [
+  ["#4488ff", "#66aaff", "#ffffff", "#66aaff"],  // blue
+  ["#ff4466", "#ff6688", "#ffaacc", "#ff6688"],  // pink
+  ["#44ff66", "#88ff88", "#ffffff", "#88ff88"],  // green
+  ["#ffaa00", "#ffcc44", "#ffffff", "#ffcc44"],  // gold
+  ["#ff0000", "#ff8800", "#ffff00", "#00ff00", "#0088ff", "#8800ff"], // rainbow
+  ["#ff44ff", "#ff88ff", "#ffffff", "#ff88ff"],  // magenta
+  ["#00ffff", "#44ffff", "#ffffff", "#44ffff"],  // cyan
+  ["#ff6600", "#ff8844", "#ffcc88", "#ff8844"],  // orange
+  ["#aa44ff", "#cc88ff", "#ffffff", "#cc88ff"],  // purple
+  ["#ff4444", "#44ff44", "#4444ff", "#ffff44"],  // multi
 ];
+
+function darkenColor(hex: string, factor: number): string {
+  const r = Math.max(0, Math.floor(parseInt(hex.slice(1, 3), 16) * (1 - factor)));
+  const g = Math.max(0, Math.floor(parseInt(hex.slice(3, 5), 16) * (1 - factor)));
+  const b = Math.max(0, Math.floor(parseInt(hex.slice(5, 7), 16) * (1 - factor)));
+  return `rgb(${r},${g},${b})`;
+}
 
 // ─── Sound Engine (Web Audio oscillators, no files) ──
 
@@ -112,7 +126,6 @@ class GameAudio {
   playDeath() {
     if (this._muted) return;
     const ctx = this.ensureCtx();
-    // Noise burst via buffer
     const len = ctx.sampleRate * 0.1;
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const data = buf.getChannelData(0);
@@ -191,7 +204,7 @@ export class GameRenderer {
 
   // Local state
   private localSnakes: Map<string, LocalSnake> = new Map();
-  private arenaRadius: number = 3000;
+  private arenaRadius: number = 5000;
   private bgPattern: CanvasPattern | null = null;
 
   // Assets
@@ -279,7 +292,6 @@ export class GameRenderer {
       this.setupJoystick(container);
     }
 
-    // Preload all assets, then wire up Colyseus listeners
     this.preloadAssets().then(() => {
       this.assetsLoaded = true;
       this.ready = true;
@@ -338,7 +350,7 @@ export class GameRenderer {
   private setupListeners() {
     this.room.state.snakes.onAdd((snake: any, key: string) => {
       const segs: { x: number; y: number }[] = [];
-      const len = snake.length || 50;
+      const len = snake.length || 40;
       const angle = snake.angle || 0;
       for (let i = 0; i < len; i++) {
         segs.push({
@@ -356,7 +368,7 @@ export class GameRenderer {
         serverHeadY: snake.headY,
         serverAngle: snake.angle,
         serverSpeed: snake.speed || 0,
-        serverLength: snake.length || 50,
+        serverLength: snake.length || 40,
         alive: snake.alive,
         skinId: snake.skinId || 0,
         boosting: snake.boosting || false,
@@ -383,7 +395,6 @@ export class GameRenderer {
     });
 
     this.room.state.snakes.onRemove((_: any, key: string) => {
-      // Spawn death particles at last known position
       const snake = this.localSnakes.get(key);
       if (snake) {
         this.spawnDeathParticles(snake.headX, snake.headY, snake.skinId);
@@ -403,12 +414,16 @@ export class GameRenderer {
         amount: entry.amount,
         timestamp: Date.now(),
       });
-      // Play kill sound if we're the killer
       const me = this.localSnakes.get(this.mySessionId);
       if (me && entry.killerName === me.name) {
         this.audio.playKill();
       }
       while (this.killFeed.length > 5) this.killFeed.shift();
+    });
+
+    // Handle food_eaten broadcast for immediate client-side removal
+    this.room.onMessage("food_eaten", (data: { ids: string[] }) => {
+      this.audio.playEat();
     });
 
     this.room.onMessage("death", (data: any) => {
@@ -421,8 +436,7 @@ export class GameRenderer {
   // ─── Death Particles ──────────────────────────────
 
   private spawnDeathParticles(worldX: number, worldY: number, skinId: number) {
-    const color = SKIN_COLORS[skinId % SKIN_COLORS.length];
-    const colors = [color, "#FFFFFF", "#FFFF00", FOOD_COLORS[skinId % FOOD_COLORS.length]];
+    const palette = SKIN_PALETTES[skinId % SKIN_PALETTES.length];
     for (let i = 0; i < 20; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 1 + Math.random() * 4;
@@ -431,7 +445,7 @@ export class GameRenderer {
         y: worldY,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        color: colors[Math.floor(Math.random() * colors.length)],
+        color: palette[Math.floor(Math.random() * palette.length)],
         life: 1.0,
         size: 3 + Math.random() * 5,
       });
@@ -443,9 +457,9 @@ export class GameRenderer {
       const p = this.particles[i];
       p.x += p.vx;
       p.y += p.vy;
-      p.vx *= 0.96; // decelerate
+      p.vx *= 0.96;
       p.vy *= 0.96;
-      p.life -= 1 / 60; // ~1 second at 60fps
+      p.life -= 1 / 60;
       if (p.life <= 0) {
         this.particles.splice(i, 1);
       }
@@ -471,7 +485,6 @@ export class GameRenderer {
 
   private drawKillFeed(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const now = Date.now();
-    // Remove expired entries (>5 seconds)
     this.killFeed = this.killFeed.filter((e) => now - e.timestamp < 5000);
     if (this.killFeed.length === 0) return;
 
@@ -492,7 +505,6 @@ export class GameRenderer {
 
       ctx.globalAlpha = alpha * 0.7;
       ctx.fillStyle = "#000000";
-      // Rounded pill
       const pr = 6;
       ctx.beginPath();
       ctx.moveTo(x + pr, y - ph);
@@ -748,7 +760,6 @@ export class GameRenderer {
   private loop = () => {
     if (this.destroyed) return;
 
-    // FPS tracking
     const now = performance.now();
     this.fpsFrames++;
     if (now - this.fpsLastUpdate > 1000) {
@@ -780,13 +791,11 @@ export class GameRenderer {
     ctx.fillStyle = "#0a0a1a";
     ctx.fillRect(0, 0, W, H);
 
-    // Title
     ctx.font = "bold 48px Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffffff";
     ctx.fillText("SWALLOW ME", W / 2, H / 2 - 40);
 
-    // Progress bar
     const barW = 300;
     const barH = 8;
     const barX = (W - barW) / 2;
@@ -803,11 +812,19 @@ export class GameRenderer {
     ctx.roundRect(barX, barY, barW * progress, barH, 4);
     ctx.fill();
 
-    // Status text
     ctx.font = "14px Arial, sans-serif";
     ctx.fillStyle = "#888";
     const statusText = progress < 1 ? "Loading assets..." : "Connecting to server...";
     ctx.fillText(statusText, W / 2, barY + 30);
+  }
+
+  // ─── Viewport culling helper ──────────────────────
+
+  private isInView(wx: number, wy: number, margin: number = 200): boolean {
+    const sx = wx - this.camX + this.cssW / 2;
+    const sy = wy - this.camY + this.cssH / 2;
+    return sx > -margin && sx < this.cssW + margin &&
+           sy > -margin && sy < this.cssH + margin;
   }
 
   private update() {
@@ -817,59 +834,68 @@ export class GameRenderer {
       this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
     }
 
-    // Track food count for eat sound
-    const currentFoodCount = this.room.state.food?.size ?? -1;
-    if (this.lastFoodCount >= 0 && currentFoodCount < this.lastFoodCount) {
-      this.audio.playEat();
-    }
-    this.lastFoodCount = currentFoodCount;
-
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
       const isMe = id === this.mySessionId;
 
+      // --- CLIENT-SIDE PREDICTION ---
       if (isMe) {
-        const speed = snake.serverSpeed || 4.5;
-        snake.headX += Math.cos(this.inputAngle) * speed;
-        snake.headY += Math.sin(this.inputAngle) * speed;
-        snake.headX += (snake.serverHeadX - snake.headX) * 0.15;
-        snake.headY += (snake.serverHeadY - snake.headY) * 0.15;
+        // Smooth angle toward mouse target
+        let angleDiff = this.inputAngle - snake.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        snake.angle += angleDiff * 0.12; // smooth turning
+
+        // Move head locally at predicted speed
+        const speed = snake.boosting ? 8.0 : 4.0;
+        snake.headX += Math.cos(snake.angle) * speed;
+        snake.headY += Math.sin(snake.angle) * speed;
+
+        // Blend toward server position to prevent drift
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.1;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.1;
 
         // Boost sound
         if (snake.boosting && !this.wasBoosting) this.audio.startBoost();
         if (!snake.boosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = snake.boosting;
       } else {
-        snake.headX += (snake.serverHeadX - snake.headX) * 0.25;
-        snake.headY += (snake.serverHeadY - snake.headY) * 0.25;
+        // Other players: lerp toward server position
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.2;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.2;
+
+        // Smooth angle for others
+        const targetAngle = snake.serverAngle;
+        let angleDiff = targetAngle - snake.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        snake.angle += angleDiff * 0.15;
       }
 
-      const targetAngle = isMe ? this.inputAngle : snake.serverAngle;
-      let angleDiff = targetAngle - snake.angle;
-      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-      snake.angle += angleDiff * 0.15;
-
+      // --- CHAIN CONSTRAINT (no gaps) ---
+      // Head is segment 0
       if (snake.segments.length > 0) {
         snake.segments[0].x = snake.headX;
         snake.segments[0].y = snake.headY;
       }
 
-      // Hard chain constraint: segments can NEVER be more than SEGMENT_SPACING apart
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
-        const dx = prev.x - curr.x;
-        const dy = prev.y - curr.y;
+        const dx = curr.x - prev.x;
+        const dy = curr.y - prev.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
+
         if (dist > SEGMENT_SPACING) {
-          const ratio = SEGMENT_SPACING / dist;
-          curr.x = prev.x - dx * ratio;
-          curr.y = prev.y - dy * ratio;
+          // HARD constraint — segment is EXACTLY spacing distance behind previous
+          const angle = Math.atan2(dy, dx);
+          curr.x = prev.x + Math.cos(angle) * SEGMENT_SPACING;
+          curr.y = prev.y + Math.sin(angle) * SEGMENT_SPACING;
         }
       }
 
-      const targetLen = snake.serverLength;
+      // Grow/shrink to match server length
+      const targetLen = snake.serverLength || 40;
       while (snake.segments.length < targetLen) {
         const last = snake.segments[snake.segments.length - 1];
         snake.segments.push({ x: last.x, y: last.y });
@@ -882,7 +908,7 @@ export class GameRenderer {
     // Update death particles
     this.updateParticles();
 
-    // Camera
+    // Camera — smooth follow
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
       this.camX += (me.headX - this.camX) * 0.08;
@@ -935,6 +961,7 @@ export class GameRenderer {
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
 
+    // Sort snakes so local player draws on top
     const sortedIds: string[] = [];
     for (const [id] of this.localSnakes) {
       if (id !== this.mySessionId) sortedIds.push(id);
@@ -949,19 +976,15 @@ export class GameRenderer {
       }
     }
 
-    // Death particles
     this.drawParticles(ctx, W, H);
-
-    // Kill feed
     this.drawKillFeed(ctx, W, H);
-
     this.drawMinimap(ctx, W, H);
 
-    // FPS counter (top-left corner, small gray text)
-    ctx.font = "11px monospace";
+    // FPS counter
+    ctx.font = "12px monospace";
     ctx.textAlign = "left";
-    ctx.fillStyle = this.fps >= 50 ? "rgba(100,255,100,0.6)" : "rgba(255,100,100,0.8)";
-    ctx.fillText(`${this.fps} FPS`, 15, 80);
+    ctx.fillStyle = this.fps >= 50 ? "#666" : "rgba(255,100,100,0.8)";
+    ctx.fillText(`FPS: ${this.fps}`, 10, H - 10);
   }
 
   // ─── Coordinate helpers ───────────────────────────
@@ -969,140 +992,154 @@ export class GameRenderer {
   private toScreenX(wx: number): number { return wx - this.camX + this.cssW / 2; }
   private toScreenY(wy: number): number { return wy - this.camY + this.cssH / 2; }
 
-  private getSnakeSize(snake: LocalSnake): number {
-    const baseSize = 28;
-    const scale = Math.pow(snake.serverLength / 50, 0.2);
-    return baseSize * Math.min(2.0, scale);
-  }
-
   // ─── Snake Drawing ────────────────────────────────
 
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
-    if (snake.segments.length < 2) return;
+    if (!snake.alive || snake.segments.length < 2) return;
 
-    const size = this.getSnakeSize(snake);
+    const bodyRadius = 10;
+    const headRadius = 14;
+    const palette = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length];
     const bodyImg = this.bodyImages[snake.skinId % this.bodyImages.length];
-    const skinColor = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
-    const r = size / 2;
+    const hasSprite = bodyImg && bodyImg.complete;
 
-    // Body segments — faked glow pass + solid pass (no shadowBlur)
-    // Glow pass: semi-transparent larger circles behind body
-    if (!bodyImg || !bodyImg.complete) {
-      ctx.globalAlpha = 0.12;
-      ctx.fillStyle = skinColor;
+    // Draw from tail to head (head renders on top)
+    // --- OUTLINE PASS (subtle dark border) ---
+    if (!hasSprite) {
       ctx.beginPath();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
         const sy = this.toScreenY(seg.y);
-        if (sx < -size * 2 || sx > W + size * 2 || sy < -size * 2 || sy > H + size * 2) continue;
-        ctx.moveTo(sx + r * 1.8, sy);
-        ctx.arc(sx, sy, r * 1.8, 0, Math.PI * 2);
+        ctx.moveTo(sx + bodyRadius + 1.5, sy);
+        ctx.arc(sx, sy, bodyRadius + 1.5, 0, Math.PI * 2);
       }
+      ctx.fillStyle = "rgba(0,0,0,0.4)";
       ctx.fill();
-      ctx.globalAlpha = 1.0;
     }
 
-    // Solid body pass
-    if (bodyImg && bodyImg.complete) {
-      // Sprite-based: must draw each segment individually
+    // --- BODY PASS ---
+    if (hasSprite) {
+      const size = bodyRadius * 2;
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
         const sy = this.toScreenY(seg.y);
-        if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
-        ctx.drawImage(bodyImg, sx - r, sy - r, size, size);
+        ctx.drawImage(bodyImg, sx - bodyRadius, sy - bodyRadius, size, size);
       }
     } else {
-      // Flat color: batch all into one path for massive perf gain
-      ctx.fillStyle = skinColor;
-      ctx.beginPath();
+      // Batch by color band for fewer state changes
+      const colorBands = new Map<string, { sx: number; sy: number }[]>();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
-        ctx.moveTo(sx + r, sy);
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
+        const colorIndex = Math.floor(i / 3) % palette.length;
+        const color = palette[colorIndex];
+        if (!colorBands.has(color)) colorBands.set(color, []);
+        colorBands.get(color)!.push({
+          sx: this.toScreenX(seg.x),
+          sy: this.toScreenY(seg.y),
+        });
       }
-      ctx.fill();
+
+      for (const [color, segs] of colorBands) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        for (const s of segs) {
+          ctx.moveTo(s.sx + bodyRadius, s.sy);
+          ctx.arc(s.sx, s.sy, bodyRadius, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
     }
 
-    // Head
-    const headSx = this.toScreenX(snake.headX);
-    const headSy = this.toScreenY(snake.headY);
-    const headSize = size * 1.3;
+    // --- HEAD ---
+    const head = snake.segments[0];
+    if (!this.isInView(head.x, head.y, 200)) return;
+
+    const hsx = this.toScreenX(head.x);
+    const hsy = this.toScreenY(head.y);
 
     if (this.headImage && this.headImage.complete) {
+      const headSize = headRadius * 2.6;
       ctx.save();
-      ctx.translate(headSx, headSy);
+      ctx.translate(hsx, hsy);
       ctx.rotate(snake.angle - Math.PI / 2);
       ctx.drawImage(this.headImage, -headSize / 2, -headSize / 2, headSize, headSize);
       ctx.restore();
     } else {
-      ctx.save();
-      ctx.translate(headSx, headSy);
-      ctx.rotate(snake.angle - Math.PI / 2);
-      const hR = headSize / 2;
-      ctx.fillStyle = skinColor;
+      // Flat head with eyes
+      ctx.fillStyle = palette[0];
       ctx.beginPath();
-      ctx.ellipse(0, 0, hR, hR * 1.15, 0, 0, Math.PI * 2);
+      ctx.arc(hsx, hsy, headRadius, 0, Math.PI * 2);
       ctx.fill();
+
       // Eyes
-      ctx.fillStyle = "#fff";
+      const eyeOffset = headRadius * 0.5;
+      const angle = snake.angle;
+      const eyeAngle1 = angle + 0.4;
+      const eyeAngle2 = angle - 0.4;
+
+      // White
+      ctx.fillStyle = "#ffffff";
       ctx.beginPath();
-      ctx.arc(-hR * 0.35, -hR * 0.5, hR * 0.22, 0, Math.PI * 2);
-      ctx.arc(hR * 0.35, -hR * 0.5, hR * 0.22, 0, Math.PI * 2);
+      ctx.arc(hsx + Math.cos(eyeAngle1) * eyeOffset, hsy + Math.sin(eyeAngle1) * eyeOffset, 4, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "#000";
       ctx.beginPath();
-      ctx.arc(-hR * 0.35, -hR * 0.5, hR * 0.1, 0, Math.PI * 2);
-      ctx.arc(hR * 0.35, -hR * 0.5, hR * 0.1, 0, Math.PI * 2);
+      ctx.arc(hsx + Math.cos(eyeAngle2) * eyeOffset, hsy + Math.sin(eyeAngle2) * eyeOffset, 4, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
+
+      // Pupils
+      ctx.fillStyle = "#000000";
+      ctx.beginPath();
+      ctx.arc(hsx + Math.cos(eyeAngle1) * (eyeOffset + 2), hsy + Math.sin(eyeAngle1) * (eyeOffset + 2), 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(hsx + Math.cos(eyeAngle2) * (eyeOffset + 2), hsy + Math.sin(eyeAngle2) * (eyeOffset + 2), 2, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Boost glow
     if (snake.boosting && isMe) {
-      const gradient = ctx.createRadialGradient(headSx, headSy, 0, headSx, headSy, headSize * 3);
+      const gradient = ctx.createRadialGradient(hsx, hsy, 0, hsx, hsy, headRadius * 5);
       gradient.addColorStop(0, "rgba(255, 255, 100, 0.15)");
       gradient.addColorStop(1, "rgba(255, 255, 100, 0)");
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(headSx, headSy, headSize * 3, 0, Math.PI * 2);
+      ctx.arc(hsx, hsy, headRadius * 5, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
   private drawSnakeName(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number) {
+    if (!this.isInView(snake.headX, snake.headY, 200)) return;
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
-    const size = this.getSnakeSize(snake);
-    if (sx < -100 || sx > W + 100 || sy < -100 || sy > H + 100) return;
 
     ctx.font = "bold 13px Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.strokeStyle = "#000000";
     ctx.lineWidth = 3;
-    ctx.strokeText(snake.name, sx, sy - size * 0.8);
+    ctx.strokeText(snake.name, sx, sy - 22);
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(snake.name, sx, sy - size * 0.8);
+    ctx.fillText(snake.name, sx, sy - 22);
   }
 
   // ─── Food ─────────────────────────────────────────
 
   private drawFood(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const time = Date.now();
-    const margin = 30;
 
     // Batch food by color — one path per color reduces state changes
     const glowBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
     const solidBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
 
     this.room.state.food.forEach((food: any) => {
+      if (!this.isInView(food.x, food.y, 30)) return;
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
-      if (sx < -margin || sx > W + margin || sy < -margin || sy > H + margin) return;
 
       const isDeath = food.size === 2;
       const baseSize = isDeath ? 8 : 4;
@@ -1119,7 +1156,7 @@ export class GameRenderer {
       solidBatches.get(color)!.push({ sx, sy, r });
     });
 
-    // Draw all glow halos (batched by color)
+    // Draw glow halos
     ctx.globalAlpha = 0.2;
     for (const [color, items] of glowBatches) {
       ctx.fillStyle = color;
@@ -1131,7 +1168,7 @@ export class GameRenderer {
       ctx.fill();
     }
 
-    // Draw all solid food (batched by color)
+    // Draw solid food
     ctx.globalAlpha = 1.0;
     for (const [color, items] of solidBatches) {
       ctx.fillStyle = color;
@@ -1222,7 +1259,7 @@ export class GameRenderer {
         color = "#888888";
         dotSize = 2.5;
       } else {
-        color = SKIN_COLORS[snake.skinId % SKIN_COLORS.length];
+        color = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length][0];
         dotSize = 3;
       }
 

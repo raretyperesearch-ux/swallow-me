@@ -10,4 +10,12 @@ html, body {
   -webkit-overflow-scrolling: none;
   overscroll-behavior: none;
   background: #0a0a1a;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+canvas {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }

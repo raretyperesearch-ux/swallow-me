@@ -13,6 +13,7 @@ import { updateBotInput } from "./BotAI";
 export interface GameLoopCallbacks {
   onKill: (event: KillEvent) => void;
   onBoostFoodDrop: (x: number, y: number) => void;
+  onFoodEaten: (foodIds: string[]) => void;
 }
 
 let _debugTickCounter = 0;
@@ -23,14 +24,15 @@ export function runGameTick(
   arenaRadius: number,
   callbacks: GameLoopCallbacks
 ): void {
-  // Debug: log segment counts every ~10 seconds (300 ticks at 30Hz)
   _debugTickCounter++;
-  if (_debugTickCounter % 300 === 0) {
-    let aliveCount = 0;
-    for (const [, snake] of snakes) {
-      if (snake.alive) aliveCount++;
+
+  // Debug: log segment counts every ~5 seconds (150 ticks at 30Hz)
+  if (_debugTickCounter % 150 === 0) {
+    for (const [id, snake] of snakes) {
+      if (!snake.alive) continue;
+      console.log(`[DEBUG] Snake ${id.slice(0, 12)}: ${snake.segments.length} segments, head at (${Math.floor(snake.headX)}, ${Math.floor(snake.headY)}), length=${Math.floor(snake.length)}`);
     }
-    console.log(`[Tick] alive=${aliveCount} food=${foods.size}`);
+    console.log(`[DEBUG] Food count: ${foods.size}`);
   }
 
   // 1. Update bot inputs
@@ -93,6 +95,7 @@ export function runGameTick(
 
   // 5. Check food consumption (uses spatial grid internally)
   const foodEats = checkFoodCollisions(snakes, foods);
+  const eatenFoodIds: string[] = [];
   for (const eat of foodEats) {
     const snake = snakes.get(eat.snakeId);
     const food = foods.get(eat.foodId);
@@ -102,7 +105,14 @@ export function runGameTick(
         : GAME_CONFIG.FOOD_VALUE;
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
+      eatenFoodIds.push(eat.foodId);
+      console.log(`[EAT] ${snake.name} ate food, length now ${Math.floor(snake.length)}`);
     }
+  }
+
+  // Notify clients of eaten food IDs for immediate removal
+  if (eatenFoodIds.length > 0) {
+    callbacks.onFoodEaten(eatenFoodIds);
   }
 
   // 6. Natural food spawning (maintain minimum)

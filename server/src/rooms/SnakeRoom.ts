@@ -163,6 +163,14 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         const food: ServerFood = { id: uuidv4(), x, y, size: 1 };
         this.serverFoods.set(food.id, food);
       },
+      onFoodEaten: (foodIds) => {
+        // Broadcast eaten food IDs to all clients for immediate removal
+        this.broadcast("food_eaten", { ids: foodIds });
+        // Also remove from state
+        for (const id of foodIds) {
+          this.state.food.delete(id);
+        }
+      },
     });
   }
 
