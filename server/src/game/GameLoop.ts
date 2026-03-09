@@ -23,13 +23,14 @@ export function runGameTick(
   arenaRadius: number,
   callbacks: GameLoopCallbacks
 ): void {
-  // Debug: log segment counts every ~5 seconds (300 ticks at 60Hz)
+  // Debug: log segment counts every ~10 seconds (300 ticks at 30Hz)
   _debugTickCounter++;
   if (_debugTickCounter % 300 === 0) {
-    for (const [id, snake] of snakes) {
-      if (!snake.alive) continue;
-      console.log(`[Debug] ${snake.name} segments=${snake.segments.length} length=${Math.floor(snake.length)} alive=${snake.alive}`);
+    let aliveCount = 0;
+    for (const [, snake] of snakes) {
+      if (snake.alive) aliveCount++;
     }
+    console.log(`[Tick] alive=${aliveCount} food=${foods.size}`);
   }
 
   // 1. Update bot inputs
@@ -57,7 +58,7 @@ export function runGameTick(
     }
   }
 
-  // 3. Check collisions
+  // 3. Check collisions (uses spatial grid internally)
   const snakeKills = checkSnakeCollisions(snakes);
   const boundaryKills = checkBoundaryCollisions(snakes, arenaRadius);
   const allKills = [...snakeKills, ...boundaryKills];
@@ -90,7 +91,7 @@ export function runGameTick(
     }
   }
 
-  // 5. Check food consumption
+  // 5. Check food consumption (uses spatial grid internally)
   const foodEats = checkFoodCollisions(snakes, foods);
   for (const eat of foodEats) {
     const snake = snakes.get(eat.snakeId);
@@ -101,7 +102,6 @@ export function runGameTick(
         : GAME_CONFIG.FOOD_VALUE;
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
-      console.log(`[Eat] ${snake.name} ate ${food.size === 2 ? 'death' : 'normal'} food → length=${Math.floor(snake.length)}`);
     }
   }
 

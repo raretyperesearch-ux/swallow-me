@@ -9,6 +9,13 @@ import { initBotState, removeBotState, getRandomBotName } from "../game/BotAI";
 import { GAME_CONFIG, TIER_CONFIG } from "../config/gameConfig";
 import { v4 as uuidv4 } from "uuid";
 
+interface ClientViewport {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export class SnakeRoom extends Room<SnakeRoomState> {
   // Server-side state (not synced — full precision, per-room instance)
   private serverSnakes = new Map<string, ServerSnake>();
@@ -19,6 +26,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
   private botCheckInterval!: ReturnType<typeof setInterval>;
   private tier: number = 1;
   private botCounter: number = 0;
+
+  // Interest management: track each client's viewport
+  private clientViewports = new Map<string, ClientViewport>();
 
   onCreate(options: { tier?: number }) {
     this.tier = options.tier || 1;
@@ -37,12 +47,12 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
     this.syncFoodToState();
 
-    // Game loop — runs physics at TICK_RATE
+    // Game loop — runs physics at TICK_RATE (30Hz)
     this.gameInterval = setInterval(() => {
       this.gameTick();
     }, 1000 / GAME_CONFIG.TICK_RATE);
 
-    // State sync — push snake positions to clients at a lower rate
+    // State sync — push filtered snake positions to each client
     this.syncInterval = setInterval(() => {
       this.syncSnakesToState();
       this.updateCounts();
@@ -63,6 +73,19 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       }
     });
 
+    // Handle viewport updates for interest management
+    this.onMessage("viewport", (client, data: { x: number; y: number; w: number; h: number }) => {
+      if (typeof data.x === "number" && typeof data.y === "number" &&
+          typeof data.w === "number" && typeof data.h === "number") {
+        this.clientViewports.set(client.sessionId, {
+          x: data.x,
+          y: data.y,
+          w: data.w,
+          h: data.h,
+        });
+      }
+    });
+
     // Handle cashout request
     this.onMessage("cashout", (client) => {
       this.handleCashout(client);
@@ -78,9 +101,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
 
     console.log(`[SnakeRoom] ${name} joined (${client.sessionId})`);
 
-    // TODO: Verify USDC deposit on-chain before spawning
-    // For Phase 1 (no money), skip verification
-
     const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
     const snake = createSnake(
       client.sessionId,
@@ -90,26 +110,32 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       spawn.y,
       tierConfig.entryAmount,
       false,
-      Math.floor(Math.random() * 10) // random skin
+      Math.floor(Math.random() * 10)
     );
 
     this.serverSnakes.set(client.sessionId, snake);
+
+    // Initialize viewport to spawn position
+    this.clientViewports.set(client.sessionId, {
+      x: spawn.x,
+      y: spawn.y,
+      w: 1920,
+      h: 1080,
+    });
+
     this.updateCounts();
   }
 
   onLeave(client: Client, consented: boolean) {
     const snake = this.serverSnakes.get(client.sessionId);
     if (snake && snake.alive) {
-      // Treat disconnect as death — forfeit value
       snake.alive = false;
       console.log(`[SnakeRoom] ${snake.name} left (forfeited $${snake.valueUsdc / 1_000_000})`);
-
-      // TODO: Call forfeit on-chain (rake the remaining value)
-      // For Phase 1, just remove
     }
 
     this.serverSnakes.delete(client.sessionId);
     this.state.snakes.delete(client.sessionId);
+    this.clientViewports.delete(client.sessionId);
     this.updateCounts();
   }
 
@@ -118,12 +144,12 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     clearInterval(this.syncInterval);
     clearInterval(this.botCheckInterval);
 
-    // Clean up bot states
     for (const [id, snake] of this.serverSnakes) {
       if (snake.isBot) removeBotState(id);
     }
     this.serverSnakes.clear();
     this.serverFoods.clear();
+    this.clientViewports.clear();
 
     console.log(`[SnakeRoom] Disposed tier $${this.tier} room: ${this.roomId}`);
   }
@@ -153,19 +179,15 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     if (event.killer) {
       const killer = this.serverSnakes.get(event.killer);
       if (killer && killer.alive) {
-        // Credit killer with payout
         killer.valueUsdc += payoutAmount;
         console.log(
-          `[Kill] ${killer.name} swallowed ${victim.name} → +$${(payoutAmount / 1_000_000).toFixed(2)} (rake: $${(rakeAmount / 1_000_000).toFixed(2)})`
+          `[Kill] ${killer.name} swallowed ${victim.name} → +$${(payoutAmount / 1_000_000).toFixed(2)}`
         );
-
-        // TODO: Call settle_kill on-chain
       }
     } else {
       console.log(
         `[Kill] ${victim.name} hit the wall → forfeited $${(event.victimValue / 1_000_000).toFixed(2)}`
       );
-      // TODO: Call forfeit on-chain
     }
 
     // Add to kill feed
@@ -176,7 +198,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     entry.timestamp = event.timestamp;
     this.state.killFeed.push(entry);
 
-    // Keep kill feed to last 10 entries
     while (this.state.killFeed.length > 10) {
       this.state.killFeed.shift();
     }
@@ -212,9 +233,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       `[Cashout] ${snake.name} cashing out $${(snake.valueUsdc / 1_000_000).toFixed(2)}`
     );
 
-    // TODO: Call cashout on-chain
-    // For Phase 1, just remove the snake
-
     snake.alive = false;
     this.serverSnakes.delete(client.sessionId);
     this.state.snakes.delete(client.sessionId);
@@ -238,7 +256,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     ).length;
     const totalAlive = realPlayerCount + aliveBotsCount;
 
-    // Fill to target if we have at least 1 real player
     if (realPlayerCount >= 1 && totalAlive < GAME_CONFIG.BOT_FILL_TARGET) {
       const botsNeeded = GAME_CONFIG.BOT_FILL_TARGET - totalAlive;
       for (let i = 0; i < botsNeeded; i++) {
@@ -246,21 +263,19 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       }
     }
 
-    // If lots of real players, remove excess bots
     if (realPlayerCount >= GAME_CONFIG.BOT_FILL_TARGET) {
-      // Kill off bots gradually
       for (const [id, snake] of this.serverSnakes) {
         if (snake.isBot && snake.alive && Math.random() < 0.3) {
           snake.alive = false;
           this.serverSnakes.delete(id);
           this.state.snakes.delete(id);
           removeBotState(id);
-          break; // One at a time
+          break;
         }
       }
     }
 
-    // Randomly kill bots occasionally so new ones spawn (keeps things dynamic)
+    // Randomly kill bots occasionally
     if (aliveBotsCount > 2 && Math.random() < 0.15) {
       const bots = Array.from(this.serverSnakes.entries()).filter(
         ([, s]) => s.isBot && s.alive
@@ -268,7 +283,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       if (bots.length > 0) {
         const [botId, bot] = bots[Math.floor(Math.random() * bots.length)];
         bot.alive = false;
-        // Drop food where bot died
         this.handleKill({
           killer: null,
           victim: botId,
@@ -301,11 +315,50 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     initBotState(botId);
   }
 
-  // ─── State Sync ────────────────────────────────────────
+  // ─── Interest Management Helpers ────────────────────────
+
+  private isInViewport(viewport: ClientViewport, x: number, y: number): boolean {
+    const margin = GAME_CONFIG.VIEWPORT_MARGIN;
+    const halfW = viewport.w / 2 + margin;
+    const halfH = viewport.h / 2 + margin;
+    return (
+      x > viewport.x - halfW &&
+      x < viewport.x + halfW &&
+      y > viewport.y - halfH &&
+      y < viewport.y + halfH
+    );
+  }
+
+  // ─── State Sync (with interest management) ──────────────
 
   private syncSnakesToState() {
+    // Collect all alive snake data for interest management
+    const aliveSnakes: [string, ServerSnake][] = [];
     for (const [id, snake] of this.serverSnakes) {
-      if (!snake.alive) continue;
+      if (snake.alive) aliveSnakes.push([id, snake]);
+    }
+
+    // Track which snake IDs should be in state (union of all clients' viewports)
+    const visibleSnakeIds = new Set<string>();
+
+    // For each real client, determine which snakes are in their viewport
+    for (const client of this.clients) {
+      const viewport = this.clientViewports.get(client.sessionId);
+      if (!viewport) continue;
+
+      // Always include self
+      visibleSnakeIds.add(client.sessionId);
+
+      for (const [id, snake] of aliveSnakes) {
+        if (this.isInViewport(viewport, snake.headX, snake.headY)) {
+          visibleSnakeIds.add(id);
+        }
+      }
+    }
+
+    // Sync visible snakes to Colyseus state
+    for (const [id, snake] of aliveSnakes) {
+      if (!visibleSnakeIds.has(id)) continue;
 
       let stateSnake = this.state.snakes.get(id);
       if (!stateSnake) {
@@ -317,7 +370,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         this.state.snakes.set(id, stateSnake);
       }
 
-      // Only sync head + metadata — NO segments over the wire
       stateSnake.headX = snake.headX;
       stateSnake.headY = snake.headY;
       stateSnake.angle = snake.angle;
@@ -329,17 +381,17 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       stateSnake.valueUsdc = snake.valueUsdc;
     }
 
-    // Remove dead snakes from state
+    // Remove snakes that are dead or no longer visible to any client
     for (const [id] of this.state.snakes) {
       const server = this.serverSnakes.get(id);
-      if (!server || !server.alive) {
+      if (!server || !server.alive || !visibleSnakeIds.has(id)) {
         this.state.snakes.delete(id);
       }
     }
   }
 
   private syncFoodToState() {
-    // Full food sync (can be optimized later with spatial partitioning)
+    // Full food sync — Colyseus handles delta encoding
     this.state.food.clear();
     for (const [id, food] of this.serverFoods) {
       const stateFood = new FoodOrb();

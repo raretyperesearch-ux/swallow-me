@@ -2,18 +2,18 @@
 
 export const GAME_CONFIG = {
   // Tick rate
-  TICK_RATE: 60, // Server updates per second
-  CLIENT_SEND_RATE: 20, // How often clients send input (throttled)
+  TICK_RATE: 30, // Server physics updates per second (down from 60 — client interpolates)
+  CLIENT_SEND_RATE: 15, // State sync pushes per second
 
   // Arena
-  ARENA_RADIUS: 3000, // Circular map radius in game units
+  ARENA_RADIUS: 5000, // Circular map radius in game units (bigger for 100 players)
   BOUNDARY_KILL: true, // Die when hitting the wall
 
-  // Snake movement
-  BASE_SPEED: 4.5, // Normal movement speed (units per tick)
-  BOOST_SPEED: 9.0, // Speed while boosting
-  TURN_RATE: 0.04, // Max radians per tick the snake can turn (wide arcs)
-  BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
+  // Snake movement (adjusted for 30Hz tick — same effective speed)
+  BASE_SPEED: 9.0, // Normal movement speed (units per tick) — doubled for 30Hz
+  BOOST_SPEED: 18.0, // Speed while boosting — doubled for 30Hz
+  TURN_RATE: 0.08, // Max radians per tick — doubled for 30Hz
+  BOOST_LENGTH_COST: 0.6, // Length units lost per tick while boosting — doubled for 30Hz
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 
   // Snake sizing
@@ -24,37 +24,40 @@ export const GAME_CONFIG = {
   BODY_RADIUS: 12, // Collision radius of body segments
 
   // Food
-  INITIAL_FOOD_COUNT: 500, // Food orbs at game start
-  MAX_FOOD: 800, // Cap on total food
+  INITIAL_FOOD_COUNT: 1000, // Food orbs at game start (more for bigger map)
+  MAX_FOOD: 2000, // Cap on total food
   FOOD_VALUE: 1.0, // Length gained per food eaten
   DEATH_FOOD_COUNT: 25, // Food orbs dropped on death
-  FOOD_SPAWN_RATE: 3, // New food per second (natural spawning)
+  FOOD_SPAWN_RATE: 5, // New food per tick when below minimum
 
   // Lobby
   MIN_PLAYERS_TO_START: 3, // Real + bots needed
-  BOT_FILL_TARGET: 5, // Fill lobby to this many total with bots
+  BOT_FILL_TARGET: 8, // Fill lobby to this many total with bots
   MAX_PLAYERS: {
-    1: 25, // $1 tier
-    5: 20, // $5 tier
-    20: 15, // $20 tier
+    1: 100, // $1 tier
+    5: 50, // $5 tier
+    20: 25, // $20 tier
   } as Record<number, number>,
+
+  // Interest management
+  VIEWPORT_MARGIN: 500, // Extra units beyond viewport to include in sync
 };
 
 export const TIER_CONFIG = {
   1: {
     entryAmount: 1_000_000, // 1 USDC (6 decimals)
     rakeBps: 800, // 8%
-    maxPlayers: 25,
+    maxPlayers: 100,
   },
   5: {
     entryAmount: 5_000_000, // 5 USDC
     rakeBps: 800,
-    maxPlayers: 20,
+    maxPlayers: 50,
   },
   20: {
     entryAmount: 20_000_000, // 20 USDC
     rakeBps: 800,
-    maxPlayers: 15,
+    maxPlayers: 25,
   },
 } as Record<number, { entryAmount: number; rakeBps: number; maxPlayers: number }>;
 

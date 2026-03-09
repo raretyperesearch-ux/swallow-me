@@ -220,6 +220,9 @@ export class GameRenderer {
   private fpsFrames: number = 0;
   private fpsLastUpdate: number = 0;
 
+  // Viewport reporting
+  private lastViewportSend: number = 0;
+
   // Input
   private mouseX: number = 0;
   private mouseY: number = 0;
@@ -894,10 +897,16 @@ export class GameRenderer {
       });
     }
 
-    // Kill sound — check if our kills went up
-    if (me && me.kills > 0) {
-      // We track via onStatsUpdate callback, but for sound let's detect kill feed additions
-      // Kill sound is handled per kill feed entry add (in setupListeners)
+    // Send viewport to server for interest management (every 500ms)
+    const now2 = performance.now();
+    if (now2 - this.lastViewportSend > 500) {
+      this.lastViewportSend = now2;
+      this.room.send("viewport", {
+        x: this.camX,
+        y: this.camY,
+        w: this.cssW,
+        h: this.cssH,
+      });
     }
   }
 
@@ -995,20 +1004,28 @@ export class GameRenderer {
     }
 
     // Solid body pass
-    for (let i = snake.segments.length - 1; i >= 1; i--) {
-      const seg = snake.segments[i];
-      const sx = this.toScreenX(seg.x);
-      const sy = this.toScreenY(seg.y);
-      if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
-
-      if (bodyImg && bodyImg.complete) {
+    if (bodyImg && bodyImg.complete) {
+      // Sprite-based: must draw each segment individually
+      for (let i = snake.segments.length - 1; i >= 1; i--) {
+        const seg = snake.segments[i];
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
         ctx.drawImage(bodyImg, sx - r, sy - r, size, size);
-      } else {
-        ctx.fillStyle = skinColor;
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fill();
       }
+    } else {
+      // Flat color: batch all into one path for massive perf gain
+      ctx.fillStyle = skinColor;
+      ctx.beginPath();
+      for (let i = snake.segments.length - 1; i >= 1; i--) {
+        const seg = snake.segments[i];
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        if (sx < -size || sx > W + size || sy < -size || sy > H + size) continue;
+        ctx.moveTo(sx + r, sy);
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      }
+      ctx.fill();
     }
 
     // Head
