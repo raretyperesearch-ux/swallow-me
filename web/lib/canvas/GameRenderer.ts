@@ -1082,7 +1082,7 @@ export class GameRenderer {
         snake.angle += angleDiff * 0.12; // smooth turning
 
         // Move head locally at predicted speed
-        const speed = snake.boosting ? 8.0 : 4.0;
+        const speed = snake.boosting ? 12.0 : 6.0;
         snake.headX += Math.cos(snake.angle) * speed;
         snake.headY += Math.sin(snake.angle) * speed;
 
