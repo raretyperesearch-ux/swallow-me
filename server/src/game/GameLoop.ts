@@ -17,25 +17,12 @@ export interface GameLoopCallbacks {
   onFoodSpawned: (foods: ServerFood[]) => void;
 }
 
-let _debugTickCounter = 0;
-
 export function runGameTick(
   snakes: Map<string, ServerSnake>,
   foods: Map<string, ServerFood>,
   arenaRadius: number,
   callbacks: GameLoopCallbacks
 ): void {
-  _debugTickCounter++;
-
-  // Debug: log segment counts every ~5 seconds (150 ticks at 30Hz)
-  if (_debugTickCounter % 150 === 0) {
-    for (const [id, snake] of snakes) {
-      if (!snake.alive) continue;
-      console.log(`[DEBUG] Snake ${id.slice(0, 12)}: ${snake.segments.length} segments, head at (${Math.floor(snake.headX)}, ${Math.floor(snake.headY)}), length=${Math.floor(snake.length)}`);
-    }
-    console.log(`[DEBUG] Food count: ${foods.size}`);
-  }
-
   // 1. Update bot inputs
   for (const [, snake] of snakes) {
     if (!snake.alive || !snake.isBot) continue;
@@ -110,7 +97,6 @@ export function runGameTick(
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
       eatenFoodIds.push(eat.foodId);
-      console.log(`[FOOD REMOVED] ${eat.foodId} eaten by ${snake.name}, length now ${Math.floor(snake.length)}`);
     }
   }
 

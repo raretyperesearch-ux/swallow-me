@@ -296,8 +296,6 @@ export class GameRenderer {
   // Boost button (bottom-right, mobile)
   private boostTouchId: number | null = null;
   private touchBoosting: boolean = false;
-  private readonly BOOST_BTN_OUTER_R = 60;    // outer ring radius
-  private readonly BOOST_BTN_INNER_R = 25;    // inner circle radius
 
   // Boost energy tracking
   private maxLengthReached: number = 40;
@@ -311,11 +309,6 @@ export class GameRenderer {
   private loadingTotal: number = 2 + NUM_BODY_SKINS;
   private ready: boolean = false;
   private loadingSnakePhase: number = 0;
-
-  // Landscape hint
-  private landscapeHintAlpha: number = 0;
-  private landscapeHintShown: boolean = false;
-  private landscapeHintStart: number = 0;
 
   // FPS cap for mobile
   private lastRenderTime: number = 0;
@@ -351,9 +344,6 @@ export class GameRenderer {
     this.resizeCanvas();
     this.setupInput();
 
-    // Check for portrait orientation hint
-    this.checkLandscapeHint();
-
     this.preloadAssets().then(() => {
       this.assetsLoaded = true;
       this.ready = true;
@@ -384,50 +374,6 @@ export class GameRenderer {
     if (this.bgImage && this.bgImage.complete) {
       this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
     }
-  }
-
-  // ─── Landscape Hint ────────────────────────────────
-
-  private checkLandscapeHint() {
-    if (!this.isMobile) return;
-    const isPortrait = window.innerHeight > window.innerWidth;
-    if (isPortrait && !this.landscapeHintShown) {
-      this.landscapeHintAlpha = 1.0;
-      this.landscapeHintShown = true;
-      this.landscapeHintStart = performance.now();
-    }
-  }
-
-  private drawLandscapeHint(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    if (this.landscapeHintAlpha <= 0) return;
-
-    // Fade out over 3 seconds
-    const elapsed = performance.now() - this.landscapeHintStart;
-    if (elapsed > 3000) {
-      this.landscapeHintAlpha = Math.max(0, 1 - (elapsed - 3000) / 1000);
-    }
-    if (this.landscapeHintAlpha <= 0) return;
-
-    ctx.save();
-    ctx.globalAlpha = this.landscapeHintAlpha * 0.85;
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(0, 0, W, H);
-    ctx.globalAlpha = this.landscapeHintAlpha;
-
-    // Phone icon rotated
-    ctx.font = "48px Arial, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#ffffff";
-    ctx.save();
-    ctx.translate(W / 2, H / 2 - 30);
-    ctx.rotate(Math.PI / 2);
-    ctx.fillText("\u{1F4F1}", 0, 0);
-    ctx.restore();
-
-    ctx.font = "18px Arial, sans-serif";
-    ctx.fillStyle = "#aaaaaa";
-    ctx.fillText("Rotate for best experience", W / 2, H / 2 + 30);
-    ctx.restore();
   }
 
   // ─── Asset Preloading ─────────────────────────────
@@ -696,10 +642,11 @@ export class GameRenderer {
     this.killFeed = this.killFeed.filter((e) => now - e.timestamp < 5000);
     if (this.killFeed.length === 0) return;
 
-    const safeBottom = this.isMobile ? 20 : 20;
+    // On mobile, position above joystick area (bottom-left, ~160px from bottom)
+    const safeBottom = this.isMobile ? 160 : 20;
     const x = 15;
     let y = H - safeBottom;
-    ctx.font = this.isMobile ? "11px Arial, sans-serif" : "12px Arial, sans-serif";
+    ctx.font = this.isMobile ? "10px Arial, sans-serif" : "12px Arial, sans-serif";
     ctx.textAlign = "left";
 
     for (let i = this.killFeed.length - 1; i >= 0; i--) {
@@ -742,7 +689,6 @@ export class GameRenderer {
   private setupInput() {
     window.addEventListener("resize", () => {
       this.resizeCanvas();
-      this.checkLandscapeHint();
     });
 
     // --- DESKTOP MOUSE (only on non-touch devices) ---
@@ -778,14 +724,27 @@ export class GameRenderer {
     if (this.isTouchDevice) {
       this.canvas.addEventListener("touchstart", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         for (let i = 0; i < e.changedTouches.length; i++) {
           const touch = e.changedTouches[i];
           const tx = touch.clientX;
           const ty = touch.clientY;
 
-          // Zone-based detection: bottom-right quadrant = boost button
-          const isBoostZone = tx > this.cssW * 0.7 && ty > this.cssH * 0.7;
-          if (isBoostZone && this.boostTouchId === null) {
+          // Check boost button first — hitbox is radius + 15px for easier tapping
+          const btn = this.getBoostButtonCenter();
+          const bdx = tx - btn.x;
+          const bdy = ty - btn.y;
+          const bDist = Math.sqrt(bdx * bdx + bdy * bdy);
+          const hitRadius = btn.radius + 15;
+
+          if (bDist < hitRadius && this.boostTouchId === null) {
+            this.boostTouchId = touch.identifier;
+            this.touchBoosting = true;
+            continue;
+          }
+
+          // Also catch zone-based: bottom-right quadrant = boost
+          if (tx > this.cssW * 0.7 && ty > this.cssH * 0.7 && this.boostTouchId === null) {
             this.boostTouchId = touch.identifier;
             this.touchBoosting = true;
             continue;
@@ -805,23 +764,23 @@ export class GameRenderer {
 
       this.canvas.addEventListener("touchmove", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         for (let i = 0; i < e.changedTouches.length; i++) {
           const touch = e.changedTouches[i];
           if (touch.identifier === this.joystickTouchId) {
             this.handleJoystickMove(touch.clientX, touch.clientY);
           }
-          // Boost button doesn't need move tracking — just hold
         }
       }, { passive: false });
 
       this.canvas.addEventListener("touchend", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         for (let i = 0; i < e.changedTouches.length; i++) {
           const tid = e.changedTouches[i].identifier;
           if (tid === this.joystickTouchId) {
             this.joystickActive = false;
             this.joystickTouchId = null;
-            // Snake keeps moving in last direction
           }
           if (tid === this.boostTouchId) {
             this.boostTouchId = null;
@@ -832,6 +791,7 @@ export class GameRenderer {
 
       this.canvas.addEventListener("touchcancel", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         this.joystickActive = false;
         this.joystickTouchId = null;
         this.boostTouchId = null;
@@ -888,49 +848,48 @@ export class GameRenderer {
 
   // ─── Boost Button (bottom-right, mobile) ──────────
 
-  private getBoostButtonCenter(): { x: number; y: number } {
+  private getBoostButtonCenter(): { x: number; y: number; radius: number } {
+    const isLandscape = this.cssW > this.cssH;
+    const r = isLandscape ? 30 : 35;
     return {
-      x: this.cssW - 70,
-      y: this.cssH - 100,
+      x: this.cssW - r - 20,
+      y: this.cssH - r - 35,
+      radius: r,
     };
   }
 
   private drawBoostButton(ctx: CanvasRenderingContext2D) {
     if (!this.isTouchDevice) return;
 
-    const { x, y } = this.getBoostButtonCenter();
+    const { x, y, radius } = this.getBoostButtonCenter();
+    const me = this.localSnakes.get(this.mySessionId);
+    const canBoost = me && me.alive && me.serverLength > 15;
 
-    // Energy arc around button (outside outer ring)
-    this.drawBoostEnergyArc(ctx, x, y, this.BOOST_BTN_OUTER_R + 6);
+    // Energy arc around the outside
+    this.drawBoostEnergyArc(ctx, x, y, radius + 5);
 
-    // Outer ring
+    // Main circle
     ctx.beginPath();
-    ctx.arc(x, y, this.BOOST_BTN_OUTER_R, 0, Math.PI * 2);
-    ctx.strokeStyle = this.touchBoosting
-      ? "rgba(0, 255, 100, 0.8)"
-      : "rgba(255, 255, 255, 0.4)";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // Inner filled circle
-    ctx.beginPath();
-    ctx.arc(x, y, this.BOOST_BTN_INNER_R, 0, Math.PI * 2);
-    if (this.touchBoosting) {
-      ctx.fillStyle = "rgba(0, 255, 100, 0.6)";
-      ctx.strokeStyle = "rgba(0, 255, 100, 0.9)";
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    if (this.touchBoosting && canBoost) {
+      ctx.fillStyle = "rgba(0, 255, 100, 0.2)";
+      ctx.strokeStyle = "rgba(0, 255, 100, 0.8)";
+    } else if (!canBoost) {
+      ctx.fillStyle = "rgba(255, 50, 50, 0.1)";
+      ctx.strokeStyle = "rgba(255, 50, 50, 0.4)";
     } else {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
       ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
     }
     ctx.fill();
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.stroke();
 
-    // Lightning bolt icon
-    ctx.font = "bold 24px Arial, sans-serif";
+    // Lightning bolt emoji
+    ctx.font = `${Math.floor(radius * 0.7)}px Arial, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = this.touchBoosting ? "#ffffff" : "rgba(255, 255, 255, 0.6)";
+    ctx.fillStyle = this.touchBoosting && canBoost ? "#ffffff" : "rgba(255, 255, 255, 0.6)";
     ctx.fillText("\u26A1", x, y + 1);
     ctx.textBaseline = "alphabetic";
   }
@@ -940,29 +899,21 @@ export class GameRenderer {
     if (!me || !me.alive) return;
 
     const currentLen = me.serverLength;
-    const minLen = 15; // MIN_BOOST_LENGTH from config
+    const minLen = 15;
     const maxLen = this.maxLengthReached;
-
-    // Energy = how much length available for boosting (above minimum)
     const available = Math.max(0, currentLen - minLen);
     const total = Math.max(1, maxLen - minLen);
     const pct = Math.min(1, available / total);
 
     if (pct <= 0) return;
 
-    // Arc from top (-PI/2), clockwise
     const startAngle = -Math.PI / 2;
     const endAngle = startAngle + Math.PI * 2 * pct;
 
-    // Color: green > yellow > red as energy depletes
     let arcColor: string;
-    if (pct > 0.5) {
-      arcColor = "#22cc44";
-    } else if (pct > 0.2) {
-      arcColor = "#ddaa00";
-    } else {
-      arcColor = "#ff3333";
-    }
+    if (pct > 0.5) arcColor = "#22cc44";
+    else if (pct > 0.2) arcColor = "#ddaa00";
+    else arcColor = "#ff3333";
 
     ctx.beginPath();
     ctx.arc(cx, cy, r, startAngle, endAngle);
@@ -1282,17 +1233,6 @@ export class GameRenderer {
     this.drawEatPopups(ctx, W, H);
     this.drawKillFeed(ctx, W, H);
     this.drawMinimap(ctx, W, H);
-
-    // FPS counter
-    ctx.font = "11px monospace";
-    ctx.textAlign = "left";
-    ctx.fillStyle = this.fps >= 50 ? "#555" : "rgba(255,100,100,0.8)";
-    ctx.fillText(`${this.fps} FPS`, 10, H - 10);
-
-    // Landscape hint overlay
-    if (this.isMobile) {
-      this.drawLandscapeHint(ctx, W, H);
-    }
   }
 
   // ─── Coordinate helpers ───────────────────────────
@@ -1458,7 +1398,8 @@ export class GameRenderer {
 
   private drawFood(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const time = Date.now();
-    const foodViewMargin = this.isMobile ? 50 : 50;
+    // On mobile, only render food within tight margin for performance
+    const foodViewMargin = this.isMobile ? -100 : 50;
 
     // Batch food by color — one path per color reduces state changes
     const glowBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
@@ -1545,11 +1486,12 @@ export class GameRenderer {
   // ─── Minimap ──────────────────────────────────────
 
   private drawMinimap(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    const SIZE = this.isMobile ? 130 : 200;
-    const PADDING = this.isMobile ? 10 : 15;
+    const isLandscape = W > H;
+    const SIZE = this.isMobile ? (isLandscape ? 100 : 120) : 200;
+    const PADDING = 10;
     const mx = W - SIZE - PADDING;
-    // Top-right, below Cash Out button area (~70px from top)
-    const my = this.isMobile ? 60 : 70;
+    // Top-right, below HUD bar
+    const my = this.isMobile ? 50 : 70;
     const scale = (SIZE - 20) / (this.arenaRadius * 2);
 
     ctx.save();

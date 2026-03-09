@@ -104,22 +104,22 @@ export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) 
         {/* Mute */}
         <button
           onClick={handleToggleMute}
-          className={`pointer-events-auto bg-black/70 hover:bg-black/90 text-white font-bold rounded-lg transition-colors backdrop-blur-sm flex items-center justify-center shrink-0 ${
-            mobile ? "w-8 h-8 text-xs" : "w-12 h-12 text-lg"
+          className={`pointer-events-auto bg-black/70 hover:bg-black/90 text-white font-bold rounded-full transition-colors backdrop-blur-sm flex items-center justify-center shrink-0 ${
+            mobile ? "w-7 h-7 text-[10px]" : "w-10 h-10 text-base"
           }`}
           title={stats.muted ? "Unmute" : "Mute"}
         >
           {stats.muted ? "\u{1F507}" : "\u{1F50A}"}
         </button>
 
-        {/* Cash Out */}
+        {/* Cash Out — pill shape */}
         <button
           onClick={handleCashout}
-          className={`pointer-events-auto bg-green-500 hover:bg-green-400 text-black font-bold rounded-lg transition-colors shrink-0 ${
-            mobile ? "px-2 py-1 text-[12px] max-w-[110px]" : "px-6 py-3"
+          className={`pointer-events-auto bg-green-500 hover:bg-green-400 text-black font-bold rounded-full transition-colors shrink-0 ${
+            mobile ? "px-2.5 h-[30px] text-[11px] leading-none" : "px-5 py-2.5 text-sm"
           }`}
         >
-          {mobile ? `$${stats.value.toFixed(2)}` : `Cash Out $${stats.value.toFixed(2)}`}
+          {mobile ? `Cash $${stats.value.toFixed(2)}` : `Cash Out $${stats.value.toFixed(2)}`}
         </button>
       </div>
     </div>
