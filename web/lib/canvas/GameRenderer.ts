@@ -1256,22 +1256,11 @@ export class GameRenderer {
     const headRadius = 14;
     const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     const outlineColor = darkenColor(snakeColor, 0.4);
-    const bodyImg = this.bodyImages[snake.skinId % this.bodyImages.length];
-    const hasSprite = bodyImg && bodyImg.complete;
     const useGradient = !this.isMobile;
 
-    // --- BODY PASS (uniform color, color-matched outline) ---
+    // --- BODY PASS (uniform solid color, no sprites) ---
     ctx.globalAlpha = 1.0;
-    if (hasSprite) {
-      const size = bodyRadius * 2;
-      for (let i = snake.segments.length - 1; i >= 1; i--) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        ctx.drawImage(bodyImg, sx - bodyRadius, sy - bodyRadius, size, size);
-      }
-    } else if (useGradient) {
+    if (useGradient) {
       // Desktop: per-segment dark outline + radial gradient, uniform color
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
