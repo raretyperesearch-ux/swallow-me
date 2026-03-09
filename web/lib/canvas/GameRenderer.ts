@@ -62,8 +62,6 @@ const FOOD_COLORS = [
   "#FFFFFF", "#44FFFF", "#88FF22", "#FFDD22",
 ];
 
-const NUM_BODY_SKINS = 13;
-
 // Solid snake body colors — one color per snake, clean look
 const SNAKE_COLORS: string[] = [
   "#4488FF",  // blue (player default)
@@ -241,8 +239,6 @@ export class GameRenderer {
 
   // Assets
   private bgImage: HTMLImageElement | null = null;
-  private headImage: HTMLImageElement | null = null;
-  private bodyImages: HTMLImageElement[] = [];
   private assetsLoaded: boolean = false;
 
   // Death particles
@@ -313,7 +309,7 @@ export class GameRenderer {
 
   // Loading
   private loadingProgress: number = 0;
-  private loadingTotal: number = 2 + NUM_BODY_SKINS;
+  private loadingTotal: number = 1;
   private ready: boolean = false;
   private loadingSnakePhase: number = 0;
 
@@ -386,8 +382,7 @@ export class GameRenderer {
   // ─── Asset Preloading ─────────────────────────────
 
   private async preloadAssets() {
-    const bodyPaths = Array.from({ length: NUM_BODY_SKINS }, (_, i) => `/assets/body/${i}.png`);
-    const allPaths = ["/assets/Map2.png", "/assets/head.png", ...bodyPaths];
+    const allPaths = ["/assets/Map2.png"];
     this.loadingTotal = allPaths.length;
     this.loadingProgress = 0;
 
@@ -404,8 +399,6 @@ export class GameRenderer {
     );
 
     this.bgImage = results[0];
-    this.headImage = results[1];
-    this.bodyImages = results.slice(2).filter((img): img is HTMLImageElement => img !== null);
   }
 
   // ─── Colyseus Sync ────────────────────────────────
@@ -1086,7 +1079,7 @@ export class GameRenderer {
         let angleDiff = this.inputAngle - snake.angle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * 0.12; // smooth turning
+        snake.angle += angleDiff * 0.15; // smooth turning
 
         // Move head locally at predicted speed
         const speed = snake.boosting ? 16.0 : 8.0;
@@ -1165,8 +1158,8 @@ export class GameRenderer {
     // Camera — smooth follow
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
-      this.camX += (me.headX - this.camX) * 0.08;
-      this.camY += (me.headY - this.camY) * 0.08;
+      this.camX += (me.headX - this.camX) * 0.1;
+      this.camY += (me.headY - this.camY) * 0.1;
 
       // Track max length for boost energy arc
       if (me.serverLength > this.maxLengthReached) {
@@ -1304,18 +1297,16 @@ export class GameRenderer {
 
     const hsx = this.toScreenX(head.x);
     const hsy = this.toScreenY(head.y);
-    const skinColor = snakeColor;
-
     ctx.save();
     ctx.translate(hsx, hsy);
     ctx.rotate(snake.angle);
 
-    // Oval head shape
+    // Circle head shape (1.4x body radius)
     ctx.beginPath();
-    ctx.ellipse(0, 0, headRadius * 1.4, headRadius * 1.1, 0, 0, Math.PI * 2);
-    ctx.fillStyle = skinColor;
+    ctx.arc(0, 0, bodyRadius * 1.4, 0, Math.PI * 2);
+    ctx.fillStyle = snakeColor;
     ctx.fill();
-    ctx.strokeStyle = darkenColor(skinColor, 0.4);
+    ctx.strokeStyle = darkenColor(snakeColor, 0.4);
     ctx.lineWidth = 2;
     ctx.stroke();
 
