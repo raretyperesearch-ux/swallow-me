@@ -40,12 +40,12 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     this.state.tier = this.tier;
     this.state.arenaRadius = GAME_CONFIG.ARENA_RADIUS;
 
-    // Spawn initial food
+    // Spawn initial food and sync to state individually
     for (let i = 0; i < GAME_CONFIG.INITIAL_FOOD_COUNT; i++) {
       const food = spawnRandomFood(GAME_CONFIG.ARENA_RADIUS);
       this.serverFoods.set(food.id, food);
+      this.addFoodToState(food);
     }
-    this.syncFoodToState();
 
     // Game loop — runs physics at TICK_RATE (30Hz)
     this.gameInterval = setInterval(() => {
@@ -154,6 +154,21 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     console.log(`[SnakeRoom] Disposed tier $${this.tier} room: ${this.roomId}`);
   }
 
+  // ─── Individual Food State Helpers ─────────────────────
+
+  private addFoodToState(food: ServerFood) {
+    const stateFood = new FoodOrb();
+    stateFood.id = food.id;
+    stateFood.x = food.x;
+    stateFood.y = food.y;
+    stateFood.size = food.size;
+    this.state.food.set(food.id, stateFood);
+  }
+
+  private removeFoodFromState(foodId: string) {
+    this.state.food.delete(foodId);
+  }
+
   // ─── Game Loop ─────────────────────────────────────────
 
   private gameTick() {
@@ -162,13 +177,20 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       onBoostFoodDrop: (x, y) => {
         const food: ServerFood = { id: uuidv4(), x, y, size: 1 };
         this.serverFoods.set(food.id, food);
+        this.addFoodToState(food);
       },
       onFoodEaten: (foodIds) => {
         // Broadcast eaten food IDs to all clients for immediate removal
         this.broadcast("food_eaten", { ids: foodIds });
-        // Also remove from state
+        // Remove from Colyseus state
         for (const id of foodIds) {
-          this.state.food.delete(id);
+          this.removeFoodFromState(id);
+        }
+      },
+      onFoodSpawned: (foods) => {
+        // Add new food to Colyseus state so clients can see it
+        for (const food of foods) {
+          this.addFoodToState(food);
         }
       },
     });
@@ -213,8 +235,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     // Remove dead snake from synced state
     this.state.snakes.delete(event.victim);
 
-    // Sync food after death drops
-    this.syncFoodToState();
+    // Death food is now synced via onFoodSpawned callback — no full sync needed
 
     // Notify the killed client
     const victimClient = this.clients.find((c) => c.sessionId === event.victim);
@@ -395,19 +416,6 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       if (!server || !server.alive || !visibleSnakeIds.has(id)) {
         this.state.snakes.delete(id);
       }
-    }
-  }
-
-  private syncFoodToState() {
-    // Full food sync — Colyseus handles delta encoding
-    this.state.food.clear();
-    for (const [id, food] of this.serverFoods) {
-      const stateFood = new FoodOrb();
-      stateFood.id = id;
-      stateFood.x = food.x;
-      stateFood.y = food.y;
-      stateFood.size = food.size;
-      this.state.food.set(id, stateFood);
     }
   }
 

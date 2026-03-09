@@ -31,6 +31,23 @@ interface DeathParticle {
   size: number;
 }
 
+interface BoostParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  color: string;
+  life: number;
+  size: number;
+}
+
+interface EatPopup {
+  x: number;
+  y: number;
+  life: number;
+  text: string;
+}
+
 interface KillFeedItem {
   killerName: string;
   victimName: string;
@@ -41,8 +58,8 @@ interface KillFeedItem {
 const SEGMENT_SPACING = 4;
 
 const FOOD_COLORS = [
-  "#FF0000", "#FFFF00", "#00FF00", "#FF00FF",
-  "#FFFFFF", "#00FFFF", "#7FFF00", "#FFCC00",
+  "#FF3333", "#FFFF44", "#33FF55", "#FF44FF",
+  "#FFFFFF", "#44FFFF", "#88FF22", "#FFDD22",
 ];
 
 const NUM_BODY_SKINS = 13;
@@ -66,6 +83,14 @@ function darkenColor(hex: string, factor: number): string {
   const g = Math.max(0, Math.floor(parseInt(hex.slice(3, 5), 16) * (1 - factor)));
   const b = Math.max(0, Math.floor(parseInt(hex.slice(5, 7), 16) * (1 - factor)));
   return `rgb(${r},${g},${b})`;
+}
+
+function detectMobile(): boolean {
+  return (
+    navigator.maxTouchPoints > 0 ||
+    "ontouchstart" in window ||
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  );
 }
 
 // ─── Sound Engine (Web Audio oscillators, no files) ──
@@ -216,6 +241,16 @@ export class GameRenderer {
   // Death particles
   private particles: DeathParticle[] = [];
 
+  // Boost particles
+  private boostParticles: BoostParticle[] = [];
+  private boostFrameCounter: number = 0;
+
+  // Eat popups (+1 text)
+  private eatPopups: EatPopup[] = [];
+
+  // Track food IDs eaten via broadcast for immediate removal
+  private eatenFoodIds: Set<string> = new Set();
+
   // Kill feed
   private killFeed: KillFeedItem[] = [];
 
@@ -240,29 +275,51 @@ export class GameRenderer {
   private mouseX: number = 0;
   private mouseY: number = 0;
   private mouseDown: boolean = false;
-  private inputThrottle: number = 0;
   private inputAngle: number = 0;
 
-  // Mobile joystick
+  // Mobile detection
+  private isMobile: boolean = false;
   private isTouchDevice: boolean = false;
+
+  // Mobile joystick — floating, appears at touch point (direction ONLY)
   private joystickActive: boolean = false;
   private joystickCenterX: number = 0;
   private joystickCenterY: number = 0;
   private joystickKnobX: number = 0;
   private joystickKnobY: number = 0;
   private joystickTouchId: number | null = null;
-  private joystickCanvas: HTMLCanvasElement | null = null;
-  private joystickCtx: CanvasRenderingContext2D | null = null;
 
-  private readonly JOYSTICK_OUTER_R = 60;
-  private readonly JOYSTICK_INNER_R = 25;
-  private readonly JOYSTICK_MARGIN = 40;
-  private readonly BOOST_THRESHOLD = 0.7;
+  private readonly JOYSTICK_RADIUS = 60;
+  private readonly KNOB_RADIUS = 25;
+  private readonly DEAD_ZONE = 8;
+
+  // Boost button (bottom-right, mobile)
+  private boostTouchId: number | null = null;
+  private touchBoosting: boolean = false;
+  private readonly BOOST_BTN_OUTER_R = 60;    // outer ring radius
+  private readonly BOOST_BTN_INNER_R = 25;    // inner circle radius
+
+  // Boost energy tracking
+  private maxLengthReached: number = 40;
+
+  // Input send throttle — only in render loop
+  private lastInputSend: number = 0;
+  private readonly INPUT_SEND_INTERVAL = 50;  // 20 sends/sec max
 
   // Loading
   private loadingProgress: number = 0;
   private loadingTotal: number = 2 + NUM_BODY_SKINS;
   private ready: boolean = false;
+  private loadingSnakePhase: number = 0;
+
+  // Landscape hint
+  private landscapeHintAlpha: number = 0;
+  private landscapeHintShown: boolean = false;
+  private landscapeHintStart: number = 0;
+
+  // FPS cap for mobile
+  private lastRenderTime: number = 0;
+  private targetFrameInterval: number = 0; // 0 = uncapped
 
   // Callbacks
   public onDeath?: (data: any) => void;
@@ -273,6 +330,16 @@ export class GameRenderer {
     this.room = room;
     this.mySessionId = room.sessionId;
 
+    this.isMobile = detectMobile();
+    this.isTouchDevice =
+      navigator.maxTouchPoints > 0 ||
+      "ontouchstart" in window;
+
+    // Cap mobile to ~30fps
+    if (this.isMobile) {
+      this.targetFrameInterval = 1000 / 30;
+    }
+
     this.canvas = document.createElement("canvas");
     this.canvas.style.display = "block";
     this.canvas.style.width = "100%";
@@ -281,16 +348,11 @@ export class GameRenderer {
     container.appendChild(this.canvas);
     this.ctx = this.canvas.getContext("2d")!;
 
-    this.isTouchDevice =
-      navigator.maxTouchPoints > 0 ||
-      "ontouchstart" in window;
-
     this.resizeCanvas();
     this.setupInput();
 
-    if (this.isTouchDevice) {
-      this.setupJoystick(container);
-    }
+    // Check for portrait orientation hint
+    this.checkLandscapeHint();
 
     this.preloadAssets().then(() => {
       this.assetsLoaded = true;
@@ -308,16 +370,64 @@ export class GameRenderer {
 
   private resizeCanvas() {
     this.dpr = window.devicePixelRatio || 1;
+    // On mobile, cap DPR to 2 for performance
+    if (this.isMobile && this.dpr > 2) {
+      this.dpr = 2;
+    }
     this.cssW = this.canvas.clientWidth || window.innerWidth;
     this.cssH = this.canvas.clientHeight || window.innerHeight;
     this.canvas.width = this.cssW * this.dpr;
     this.canvas.height = this.cssH * this.dpr;
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = true;
-    this.ctx.imageSmoothingQuality = "high";
+    this.ctx.imageSmoothingQuality = this.isMobile ? "medium" : "high";
     if (this.bgImage && this.bgImage.complete) {
       this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
     }
+  }
+
+  // ─── Landscape Hint ────────────────────────────────
+
+  private checkLandscapeHint() {
+    if (!this.isMobile) return;
+    const isPortrait = window.innerHeight > window.innerWidth;
+    if (isPortrait && !this.landscapeHintShown) {
+      this.landscapeHintAlpha = 1.0;
+      this.landscapeHintShown = true;
+      this.landscapeHintStart = performance.now();
+    }
+  }
+
+  private drawLandscapeHint(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.landscapeHintAlpha <= 0) return;
+
+    // Fade out over 3 seconds
+    const elapsed = performance.now() - this.landscapeHintStart;
+    if (elapsed > 3000) {
+      this.landscapeHintAlpha = Math.max(0, 1 - (elapsed - 3000) / 1000);
+    }
+    if (this.landscapeHintAlpha <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = this.landscapeHintAlpha * 0.85;
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = this.landscapeHintAlpha;
+
+    // Phone icon rotated
+    ctx.font = "48px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.save();
+    ctx.translate(W / 2, H / 2 - 30);
+    ctx.rotate(Math.PI / 2);
+    ctx.fillText("\u{1F4F1}", 0, 0);
+    ctx.restore();
+
+    ctx.font = "18px Arial, sans-serif";
+    ctx.fillStyle = "#aaaaaa";
+    ctx.fillText("Rotate for best experience", W / 2, H / 2 + 30);
+    ctx.restore();
   }
 
   // ─── Asset Preloading ─────────────────────────────
@@ -418,12 +528,29 @@ export class GameRenderer {
       if (me && entry.killerName === me.name) {
         this.audio.playKill();
       }
-      while (this.killFeed.length > 5) this.killFeed.shift();
+      const maxFeed = this.isMobile ? 3 : 5;
+      while (this.killFeed.length > maxFeed) this.killFeed.shift();
     });
 
     // Handle food_eaten broadcast for immediate client-side removal
     this.room.onMessage("food_eaten", (data: { ids: string[] }) => {
       this.audio.playEat();
+      // Track eaten food IDs so drawFood skips them immediately
+      for (const id of data.ids) {
+        this.eatenFoodIds.add(id);
+        // Spawn "+1" popup at food position (if we can find it in state)
+        const food = this.room.state.food.get(id);
+        if (food) {
+          this.eatPopups.push({
+            x: food.x,
+            y: food.y,
+            life: 1.0,
+            text: "+1",
+          });
+        }
+        // Auto-clear from tracking set after 2 seconds (state sync will have caught up)
+        setTimeout(() => this.eatenFoodIds.delete(id), 2000);
+      }
     });
 
     this.room.onMessage("death", (data: any) => {
@@ -481,6 +608,87 @@ export class GameRenderer {
     ctx.globalAlpha = 1.0;
   }
 
+  // ─── Boost Particles ──────────────────────────────
+
+  private spawnBoostParticle(snake: LocalSnake) {
+    if (snake.segments.length < 3) return;
+    const tail = snake.segments[snake.segments.length - 1];
+    const palette = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length];
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 0.5 + Math.random() * 1.5;
+    this.boostParticles.push({
+      x: tail.x + (Math.random() - 0.5) * 8,
+      y: tail.y + (Math.random() - 0.5) * 8,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      color: palette[Math.floor(Math.random() * palette.length)],
+      life: 1.0,
+      size: 2 + Math.random() * 4,
+    });
+  }
+
+  private updateBoostParticles() {
+    for (let i = this.boostParticles.length - 1; i >= 0; i--) {
+      const p = this.boostParticles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.94;
+      p.vy *= 0.94;
+      p.life -= 1 / 30; // fade over ~30 frames
+      p.size *= 0.97;
+      if (p.life <= 0 || p.size < 0.5) {
+        this.boostParticles.splice(i, 1);
+      }
+    }
+  }
+
+  private drawBoostParticles(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.boostParticles.length === 0) return;
+    for (const p of this.boostParticles) {
+      const sx = this.toScreenX(p.x);
+      const sy = this.toScreenY(p.y);
+      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
+
+      ctx.globalAlpha = Math.max(0, p.life * 0.8);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(sx, sy, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+  }
+
+  // ─── Eat Popups (+1 text) ──────────────────────────
+
+  private updateEatPopups() {
+    for (let i = this.eatPopups.length - 1; i >= 0; i--) {
+      const p = this.eatPopups[i];
+      p.life -= 1 / 30; // fade over ~0.5 seconds (30 frames at 60fps ≈ 0.5s)
+      p.y -= 0.5; // float upward in world coords
+      if (p.life <= 0) {
+        this.eatPopups.splice(i, 1);
+      }
+    }
+  }
+
+  private drawEatPopups(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.eatPopups.length === 0) return;
+    ctx.font = "bold 14px Arial, sans-serif";
+    ctx.textAlign = "center";
+    for (const p of this.eatPopups) {
+      if (!this.isInView(p.x, p.y, 50)) continue;
+      const sx = this.toScreenX(p.x);
+      const sy = this.toScreenY(p.y);
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = "#44ff44";
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 2;
+      ctx.strokeText(p.text, sx, sy - 15);
+      ctx.fillText(p.text, sx, sy - 15);
+    }
+    ctx.globalAlpha = 1.0;
+  }
+
   // ─── Kill Feed Drawing ────────────────────────────
 
   private drawKillFeed(ctx: CanvasRenderingContext2D, W: number, H: number) {
@@ -488,9 +696,10 @@ export class GameRenderer {
     this.killFeed = this.killFeed.filter((e) => now - e.timestamp < 5000);
     if (this.killFeed.length === 0) return;
 
+    const safeBottom = this.isMobile ? 20 : 20;
     const x = 15;
-    let y = H - 20;
-    ctx.font = "12px Arial, sans-serif";
+    let y = H - safeBottom;
+    ctx.font = this.isMobile ? "11px Arial, sans-serif" : "12px Arial, sans-serif";
     ctx.textAlign = "left";
 
     for (let i = this.killFeed.length - 1; i >= 0; i--) {
@@ -533,216 +742,246 @@ export class GameRenderer {
   private setupInput() {
     window.addEventListener("resize", () => {
       this.resizeCanvas();
-      if (this.joystickCanvas) {
-        this.resizeJoystickCanvas();
-        this.updateJoystickCenter();
+      this.checkLandscapeHint();
+    });
+
+    // --- DESKTOP MOUSE (only on non-touch devices) ---
+    if (!this.isTouchDevice) {
+      this.canvas.addEventListener("mousemove", (e) => {
+        const cx = this.cssW / 2;
+        const cy = this.cssH / 2;
+        this.inputAngle = Math.atan2(e.clientY - cy, e.clientX - cx);
+      });
+      this.canvas.addEventListener("mousedown", () => {
+        this.mouseDown = true;
+      });
+      this.canvas.addEventListener("mouseup", () => {
+        this.mouseDown = false;
+      });
+    }
+
+    // --- DESKTOP KEYBOARD (spacebar = boost) ---
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        this.mouseDown = true;
+      }
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        this.mouseDown = false;
       }
     });
 
-    this.canvas.addEventListener("mousemove", (e) => {
-      if (this.isTouchDevice) return;
-      this.mouseX = e.clientX;
-      this.mouseY = e.clientY;
-      this.sendInput();
-    });
-    this.canvas.addEventListener("mousedown", () => {
-      if (this.isTouchDevice) return;
-      this.mouseDown = true;
-      this.sendInput();
-    });
-    this.canvas.addEventListener("mouseup", () => {
-      if (this.isTouchDevice) return;
-      this.mouseDown = false;
-      this.sendInput();
-    });
-
-    if (!this.isTouchDevice) {
-      this.canvas.addEventListener("touchmove", (e) => {
-        e.preventDefault();
-        this.mouseX = e.touches[0].clientX;
-        this.mouseY = e.touches[0].clientY;
-        this.sendInput();
-      }, { passive: false });
+    // --- TOUCH INPUT (multi-touch: joystick + boost button) ---
+    if (this.isTouchDevice) {
       this.canvas.addEventListener("touchstart", (e) => {
         e.preventDefault();
-        this.mouseDown = true;
-        this.mouseX = e.touches[0].clientX;
-        this.mouseY = e.touches[0].clientY;
-        this.sendInput();
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const touch = e.changedTouches[i];
+          const tx = touch.clientX;
+          const ty = touch.clientY;
+
+          // Zone-based detection: bottom-right quadrant = boost button
+          const isBoostZone = tx > this.cssW * 0.7 && ty > this.cssH * 0.7;
+          if (isBoostZone && this.boostTouchId === null) {
+            this.boostTouchId = touch.identifier;
+            this.touchBoosting = true;
+            continue;
+          }
+
+          // Everything else = joystick (direction only)
+          if (this.joystickTouchId === null) {
+            this.joystickCenterX = tx;
+            this.joystickCenterY = ty;
+            this.joystickKnobX = tx;
+            this.joystickKnobY = ty;
+            this.joystickTouchId = touch.identifier;
+            this.joystickActive = true;
+          }
+        }
       }, { passive: false });
+
+      this.canvas.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const touch = e.changedTouches[i];
+          if (touch.identifier === this.joystickTouchId) {
+            this.handleJoystickMove(touch.clientX, touch.clientY);
+          }
+          // Boost button doesn't need move tracking — just hold
+        }
+      }, { passive: false });
+
       this.canvas.addEventListener("touchend", (e) => {
         e.preventDefault();
-        this.mouseDown = false;
-        this.sendInput();
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          const tid = e.changedTouches[i].identifier;
+          if (tid === this.joystickTouchId) {
+            this.joystickActive = false;
+            this.joystickTouchId = null;
+            // Snake keeps moving in last direction
+          }
+          if (tid === this.boostTouchId) {
+            this.boostTouchId = null;
+            this.touchBoosting = false;
+          }
+        }
+      }, { passive: false });
+
+      this.canvas.addEventListener("touchcancel", (e) => {
+        e.preventDefault();
+        this.joystickActive = false;
+        this.joystickTouchId = null;
+        this.boostTouchId = null;
+        this.touchBoosting = false;
       }, { passive: false });
     }
   }
 
-  // ─── Mobile Joystick ──────────────────────────────
+  // ─── Joystick Logic (no separate canvas) ──────────
 
-  private setupJoystick(container: HTMLDivElement) {
-    this.joystickCanvas = document.createElement("canvas");
-    this.joystickCanvas.style.position = "absolute";
-    this.joystickCanvas.style.top = "0";
-    this.joystickCanvas.style.left = "0";
-    this.joystickCanvas.style.width = "100%";
-    this.joystickCanvas.style.height = "100%";
-    this.joystickCanvas.style.pointerEvents = "auto";
-    this.joystickCanvas.style.zIndex = "10";
-    this.joystickCanvas.style.touchAction = "none";
-    container.appendChild(this.joystickCanvas);
-    this.joystickCtx = this.joystickCanvas.getContext("2d")!;
-    this.resizeJoystickCanvas();
-    this.updateJoystickCenter();
-
-    this.joystickCanvas.addEventListener("touchstart", (e) => {
-      e.preventDefault();
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        const dx = touch.clientX - this.joystickCenterX;
-        const dy = touch.clientY - this.joystickCenterY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < this.JOYSTICK_OUTER_R * 2.5) {
-          this.joystickTouchId = touch.identifier;
-          this.joystickActive = true;
-          this.updateJoystickKnob(touch.clientX, touch.clientY);
-          return;
-        }
-      }
-      const touch = e.changedTouches[0];
-      this.mouseX = touch.clientX;
-      this.mouseY = touch.clientY;
-      this.sendDesktopStyleInput();
-    }, { passive: false });
-
-    this.joystickCanvas.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === this.joystickTouchId) {
-          this.updateJoystickKnob(touch.clientX, touch.clientY);
-          return;
-        }
-      }
-    }, { passive: false });
-
-    this.joystickCanvas.addEventListener("touchend", (e) => {
-      e.preventDefault();
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === this.joystickTouchId) {
-          this.joystickActive = false;
-          this.joystickTouchId = null;
-          this.joystickKnobX = this.joystickCenterX;
-          this.joystickKnobY = this.joystickCenterY;
-          this.mouseDown = false;
-          this.sendInput();
-          return;
-        }
-      }
-    }, { passive: false });
-
-    this.joystickCanvas.addEventListener("touchcancel", (e) => {
-      e.preventDefault();
-      this.joystickActive = false;
-      this.joystickTouchId = null;
-      this.joystickKnobX = this.joystickCenterX;
-      this.joystickKnobY = this.joystickCenterY;
-      this.mouseDown = false;
-    }, { passive: false });
-  }
-
-  private resizeJoystickCanvas() {
-    if (!this.joystickCanvas || !this.joystickCtx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = this.joystickCanvas.clientWidth || window.innerWidth;
-    const h = this.joystickCanvas.clientHeight || window.innerHeight;
-    this.joystickCanvas.width = w * dpr;
-    this.joystickCanvas.height = h * dpr;
-    this.joystickCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-
-  private updateJoystickCenter() {
-    this.joystickCenterX = this.JOYSTICK_MARGIN + this.JOYSTICK_OUTER_R;
-    this.joystickCenterY = (this.joystickCanvas?.clientHeight || window.innerHeight) - this.JOYSTICK_MARGIN - this.JOYSTICK_OUTER_R;
-    this.joystickKnobX = this.joystickCenterX;
-    this.joystickKnobY = this.joystickCenterY;
-  }
-
-  private updateJoystickKnob(touchX: number, touchY: number) {
+  private handleJoystickMove(touchX: number, touchY: number) {
     const dx = touchX - this.joystickCenterX;
     const dy = touchY - this.joystickCenterY;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const maxDist = this.JOYSTICK_OUTER_R;
 
-    if (dist > maxDist) {
-      this.joystickKnobX = this.joystickCenterX + (dx / dist) * maxDist;
-      this.joystickKnobY = this.joystickCenterY + (dy / dist) * maxDist;
+    // Dead zone — ignore tiny movements
+    if (dist < this.DEAD_ZONE) return;
+
+    // Clamp knob to joystick radius
+    if (dist > this.JOYSTICK_RADIUS) {
+      this.joystickKnobX = this.joystickCenterX + (dx / dist) * this.JOYSTICK_RADIUS;
+      this.joystickKnobY = this.joystickCenterY + (dy / dist) * this.JOYSTICK_RADIUS;
     } else {
       this.joystickKnobX = touchX;
       this.joystickKnobY = touchY;
     }
 
-    const normalizedDist = Math.min(dist, maxDist) / maxDist;
-    if (normalizedDist > 0.1) {
-      this.inputAngle = Math.atan2(dy, dx);
-      this.mouseDown = normalizedDist > this.BOOST_THRESHOLD;
-      this.sendJoystickInput();
+    // Update angle from center
+    this.inputAngle = Math.atan2(dy, dx);
+
+    // Joystick is direction ONLY — no boost from joystick
+  }
+
+  // Draw joystick on MAIN canvas in SCREEN coordinates (after all game rendering)
+  private drawJoystick(ctx: CanvasRenderingContext2D) {
+    if (!this.joystickActive) return;
+
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(this.joystickCenterX, this.joystickCenterY, this.JOYSTICK_RADIUS, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Inner knob — always white, no boost coloring
+    ctx.beginPath();
+    ctx.arc(this.joystickKnobX, this.joystickKnobY, this.KNOB_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // ─── Boost Button (bottom-right, mobile) ──────────
+
+  private getBoostButtonCenter(): { x: number; y: number } {
+    return {
+      x: this.cssW - 70,
+      y: this.cssH - 100,
+    };
+  }
+
+  private drawBoostButton(ctx: CanvasRenderingContext2D) {
+    if (!this.isTouchDevice) return;
+
+    const { x, y } = this.getBoostButtonCenter();
+
+    // Energy arc around button (outside outer ring)
+    this.drawBoostEnergyArc(ctx, x, y, this.BOOST_BTN_OUTER_R + 6);
+
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(x, y, this.BOOST_BTN_OUTER_R, 0, Math.PI * 2);
+    ctx.strokeStyle = this.touchBoosting
+      ? "rgba(0, 255, 100, 0.8)"
+      : "rgba(255, 255, 255, 0.4)";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Inner filled circle
+    ctx.beginPath();
+    ctx.arc(x, y, this.BOOST_BTN_INNER_R, 0, Math.PI * 2);
+    if (this.touchBoosting) {
+      ctx.fillStyle = "rgba(0, 255, 100, 0.6)";
+      ctx.strokeStyle = "rgba(0, 255, 100, 0.9)";
+    } else {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
     }
-  }
-
-  private sendJoystickInput() {
-    const now = Date.now();
-    if (now < this.inputThrottle) return;
-    this.inputThrottle = now + 33;
-    this.room.send("input", { angle: this.inputAngle, boost: this.mouseDown });
-  }
-
-  private sendDesktopStyleInput() {
-    const now = Date.now();
-    if (now < this.inputThrottle) return;
-    this.inputThrottle = now + 33;
-    const cx = this.cssW / 2;
-    const cy = this.cssH / 2;
-    const angle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
-    this.room.send("input", { angle, boost: false });
-  }
-
-  private drawJoystick() {
-    if (!this.joystickCtx || !this.joystickCanvas) return;
-    const ctx = this.joystickCtx;
-    const w = this.joystickCanvas.clientWidth || window.innerWidth;
-    const h = this.joystickCanvas.clientHeight || window.innerHeight;
-    ctx.clearRect(0, 0, w, h);
-
-    ctx.beginPath();
-    ctx.arc(this.joystickCenterX, this.joystickCenterY, this.JOYSTICK_OUTER_R, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
     ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const knobColor = this.joystickActive
-      ? (this.mouseDown ? "rgba(100, 255, 100, 0.6)" : "rgba(255, 255, 255, 0.5)")
-      : "rgba(255, 255, 255, 0.3)";
-    ctx.beginPath();
-    ctx.arc(this.joystickKnobX, this.joystickKnobY, this.JOYSTICK_INNER_R, 0, Math.PI * 2);
-    ctx.fillStyle = knobColor;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // Lightning bolt icon
+    ctx.font = "bold 24px Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = this.touchBoosting ? "#ffffff" : "rgba(255, 255, 255, 0.6)";
+    ctx.fillText("\u26A1", x, y + 1);
+    ctx.textBaseline = "alphabetic";
   }
 
-  private sendInput() {
+  private drawBoostEnergyArc(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+    const me = this.localSnakes.get(this.mySessionId);
+    if (!me || !me.alive) return;
+
+    const currentLen = me.serverLength;
+    const minLen = 15; // MIN_BOOST_LENGTH from config
+    const maxLen = this.maxLengthReached;
+
+    // Energy = how much length available for boosting (above minimum)
+    const available = Math.max(0, currentLen - minLen);
+    const total = Math.max(1, maxLen - minLen);
+    const pct = Math.min(1, available / total);
+
+    if (pct <= 0) return;
+
+    // Arc from top (-PI/2), clockwise
+    const startAngle = -Math.PI / 2;
+    const endAngle = startAngle + Math.PI * 2 * pct;
+
+    // Color: green > yellow > red as energy depletes
+    let arcColor: string;
+    if (pct > 0.5) {
+      arcColor = "#22cc44";
+    } else if (pct > 0.2) {
+      arcColor = "#ddaa00";
+    } else {
+      arcColor = "#ff3333";
+    }
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, startAngle, endAngle);
+    ctx.strokeStyle = arcColor;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    ctx.lineCap = "butt";
+  }
+
+  // Throttled input send — called from render loop, NOT from touch events
+  private sendThrottledInput() {
     const now = Date.now();
-    if (now < this.inputThrottle) return;
-    this.inputThrottle = now + 33;
-    const cx = this.cssW / 2;
-    const cy = this.cssH / 2;
-    const angle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
-    this.room.send("input", { angle, boost: this.mouseDown });
+    if (now - this.lastInputSend < this.INPUT_SEND_INTERVAL) return;
+    this.lastInputSend = now;
+
+    // Touch: boost button only. Desktop: mouseDown or spacebar (both set mouseDown)
+    const boost = this.touchBoosting || this.mouseDown;
+    this.room.send("input", { angle: this.inputAngle, boost });
   }
 
   // ─── Public: toggle mute ──────────────────────────
@@ -761,6 +1000,17 @@ export class GameRenderer {
     if (this.destroyed) return;
 
     const now = performance.now();
+
+    // FPS cap for mobile
+    if (this.targetFrameInterval > 0) {
+      const elapsed = now - this.lastRenderTime;
+      if (elapsed < this.targetFrameInterval) {
+        this.animFrame = requestAnimationFrame(this.loop);
+        return;
+      }
+      this.lastRenderTime = now;
+    }
+
     this.fpsFrames++;
     if (now - this.fpsLastUpdate > 1000) {
       this.fps = this.fpsFrames;
@@ -774,9 +1024,15 @@ export class GameRenderer {
     } else {
       this.update();
       this.draw();
+      // Draw touch controls on main canvas AFTER all game rendering (screen coords)
+      if (this.isTouchDevice) {
+        this.drawJoystick(this.ctx);
+        this.drawBoostButton(this.ctx);
+      }
+      // Send input at throttled rate from render loop
+      this.sendThrottledInput();
     }
 
-    if (this.isTouchDevice && this.ready) this.drawJoystick();
     this.animFrame = requestAnimationFrame(this.loop);
   };
 
@@ -791,31 +1047,61 @@ export class GameRenderer {
     ctx.fillStyle = "#0a0a1a";
     ctx.fillRect(0, 0, W, H);
 
-    ctx.font = "bold 48px Arial, sans-serif";
+    // Animated snake wave icon
+    this.loadingSnakePhase += 0.05;
+    const snakeY = H / 2 - 80;
+    const numDots = 8;
+    const dotSpacing = 14;
+    const startX = W / 2 - (numDots * dotSpacing) / 2;
+    const waveAmplitude = 12;
+    const snakeColors = SKIN_PALETTES[4]; // rainbow
+
+    for (let i = 0; i < numDots; i++) {
+      const x = startX + i * dotSpacing;
+      const y = snakeY + Math.sin(this.loadingSnakePhase + i * 0.6) * waveAmplitude;
+      const colorIdx = i % snakeColors.length;
+      ctx.fillStyle = snakeColors[colorIdx];
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Title
+    ctx.font = "bold 42px Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffffff";
-    ctx.fillText("SWALLOW ME", W / 2, H / 2 - 40);
+    ctx.fillText("SWALLOW ME", W / 2, H / 2 - 20);
 
-    const barW = 300;
-    const barH = 8;
+    // Subtitle
+    ctx.font = "14px Arial, sans-serif";
+    ctx.fillStyle = "#666";
+    ctx.fillText("Stake. Eat. Cash Out.", W / 2, H / 2 + 5);
+
+    // Progress bar
+    const barW = Math.min(300, W * 0.7);
+    const barH = 6;
     const barX = (W - barW) / 2;
-    const barY = H / 2 + 10;
+    const barY = H / 2 + 30;
     const progress = this.loadingTotal > 0 ? this.loadingProgress / this.loadingTotal : 0;
 
     ctx.fillStyle = "#222";
     ctx.beginPath();
-    ctx.roundRect(barX, barY, barW, barH, 4);
+    ctx.roundRect(barX, barY, barW, barH, 3);
     ctx.fill();
 
-    ctx.fillStyle = "#22c55e";
+    // Gradient progress bar
+    const gradient = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+    gradient.addColorStop(0, "#22c55e");
+    gradient.addColorStop(1, "#4ade80");
+    ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.roundRect(barX, barY, barW * progress, barH, 4);
+    ctx.roundRect(barX, barY, barW * progress, barH, 3);
     ctx.fill();
 
-    ctx.font = "14px Arial, sans-serif";
+    ctx.font = "13px Arial, sans-serif";
     ctx.fillStyle = "#888";
     const statusText = progress < 1 ? "Loading assets..." : "Connecting to server...";
-    ctx.fillText(statusText, W / 2, barY + 30);
+    ctx.fillText(statusText, W / 2, barY + 28);
   }
 
   // ─── Viewport culling helper ──────────────────────
@@ -828,11 +1114,9 @@ export class GameRenderer {
   }
 
   private update() {
-    if (!this.isTouchDevice || !this.joystickActive) {
-      const cx = this.cssW / 2;
-      const cy = this.cssH / 2;
-      this.inputAngle = Math.atan2(this.mouseY - cy, this.mouseX - cx);
-    }
+    // inputAngle is already set by mouse/touch event handlers — no recalculation needed
+
+    this.boostFrameCounter++;
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
@@ -859,6 +1143,11 @@ export class GameRenderer {
         if (snake.boosting && !this.wasBoosting) this.audio.startBoost();
         if (!snake.boosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = snake.boosting;
+
+        // Spawn boost particles every 3 frames
+        if (snake.boosting && this.boostFrameCounter % 3 === 0) {
+          this.spawnBoostParticle(snake);
+        }
       } else {
         // Other players: lerp toward server position
         snake.headX += (snake.serverHeadX - snake.headX) * 0.2;
@@ -870,6 +1159,11 @@ export class GameRenderer {
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
         snake.angle += angleDiff * 0.15;
+
+        // Boost particles for others too (visible)
+        if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
+          this.spawnBoostParticle(snake);
+        }
       }
 
       // --- CHAIN CONSTRAINT (no gaps) ---
@@ -905,14 +1199,21 @@ export class GameRenderer {
       }
     }
 
-    // Update death particles
+    // Update particles
     this.updateParticles();
+    this.updateBoostParticles();
+    this.updateEatPopups();
 
     // Camera — smooth follow
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
       this.camX += (me.headX - this.camX) * 0.08;
       this.camY += (me.headY - this.camY) * 0.08;
+
+      // Track max length for boost energy arc
+      if (me.serverLength > this.maxLengthReached) {
+        this.maxLengthReached = me.serverLength;
+      }
 
       this.onStatsUpdate?.({
         kills: me.kills,
@@ -960,6 +1261,7 @@ export class GameRenderer {
 
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
+    this.drawBoostParticles(ctx, W, H);
 
     // Sort snakes so local player draws on top
     const sortedIds: string[] = [];
@@ -977,14 +1279,20 @@ export class GameRenderer {
     }
 
     this.drawParticles(ctx, W, H);
+    this.drawEatPopups(ctx, W, H);
     this.drawKillFeed(ctx, W, H);
     this.drawMinimap(ctx, W, H);
 
     // FPS counter
-    ctx.font = "12px monospace";
+    ctx.font = "11px monospace";
     ctx.textAlign = "left";
-    ctx.fillStyle = this.fps >= 50 ? "#666" : "rgba(255,100,100,0.8)";
-    ctx.fillText(`FPS: ${this.fps}`, 10, H - 10);
+    ctx.fillStyle = this.fps >= 50 ? "#555" : "rgba(255,100,100,0.8)";
+    ctx.fillText(`${this.fps} FPS`, 10, H - 10);
+
+    // Landscape hint overlay
+    if (this.isMobile) {
+      this.drawLandscapeHint(ctx, W, H);
+    }
   }
 
   // ─── Coordinate helpers ───────────────────────────
@@ -997,25 +1305,26 @@ export class GameRenderer {
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (!snake.alive || snake.segments.length < 2) return;
 
-    const bodyRadius = 10;
+    const bodyRadius = 12; // increased from 10 for 60%+ overlap with spacing=4
     const headRadius = 14;
     const palette = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length];
     const bodyImg = this.bodyImages[snake.skinId % this.bodyImages.length];
     const hasSprite = bodyImg && bodyImg.complete;
+    const skipOutline = this.isMobile; // skip outline on mobile for performance
 
     // Draw from tail to head (head renders on top)
-    // --- OUTLINE PASS (subtle dark border) ---
-    if (!hasSprite) {
+    // --- OUTLINE PASS (2px larger darker circle behind each segment) ---
+    if (!hasSprite && !skipOutline) {
       ctx.beginPath();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
         const sy = this.toScreenY(seg.y);
-        ctx.moveTo(sx + bodyRadius + 1.5, sy);
-        ctx.arc(sx, sy, bodyRadius + 1.5, 0, Math.PI * 2);
+        ctx.moveTo(sx + bodyRadius + 2, sy);
+        ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
       }
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.fill();
     }
 
@@ -1044,6 +1353,12 @@ export class GameRenderer {
         });
       }
 
+      // Boost pulse: vary alpha between 0.8 and 1.0
+      if (snake.boosting) {
+        const pulseAlpha = 0.8 + Math.sin(Date.now() / 80) * 0.2;
+        ctx.globalAlpha = pulseAlpha;
+      }
+
       for (const [color, segs] of colorBands) {
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -1053,6 +1368,10 @@ export class GameRenderer {
         }
         ctx.fill();
       }
+
+      if (snake.boosting) {
+        ctx.globalAlpha = 1.0;
+      }
     }
 
     // --- HEAD ---
@@ -1061,6 +1380,14 @@ export class GameRenderer {
 
     const hsx = this.toScreenX(head.x);
     const hsy = this.toScreenY(head.y);
+
+    // Head outline
+    if (!skipOutline) {
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.beginPath();
+      ctx.arc(hsx, hsy, headRadius + 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     if (this.headImage && this.headImage.complete) {
       const headSize = headRadius * 2.6;
@@ -1118,7 +1445,7 @@ export class GameRenderer {
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
 
-    ctx.font = "bold 13px Arial, sans-serif";
+    ctx.font = this.isMobile ? "bold 11px Arial, sans-serif" : "bold 13px Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.strokeStyle = "#000000";
     ctx.lineWidth = 3;
@@ -1131,41 +1458,48 @@ export class GameRenderer {
 
   private drawFood(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const time = Date.now();
+    const foodViewMargin = this.isMobile ? 50 : 50;
 
     // Batch food by color — one path per color reduces state changes
     const glowBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
     const solidBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
 
-    this.room.state.food.forEach((food: any) => {
-      if (!this.isInView(food.x, food.y, 30)) return;
+    this.room.state.food.forEach((food: any, foodId: string) => {
+      // Skip food that was eaten (broadcast arrived before state sync)
+      if (this.eatenFoodIds.has(foodId)) return;
+      if (!this.isInView(food.x, food.y, foodViewMargin)) return;
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
 
       const isDeath = food.size === 2;
-      const baseSize = isDeath ? 8 : 4;
+      const baseSize = isDeath ? 10 : 6; // increased from 8/4
       const pulse = 1 + Math.sin(time / 400 + food.x * 0.1 + food.y * 0.1) * 0.2;
       const r = baseSize * pulse;
 
       const colorIdx = Math.abs(Math.floor(food.x * 7 + food.y * 13)) % FOOD_COLORS.length;
       const color = FOOD_COLORS[colorIdx];
 
-      if (!glowBatches.has(color)) glowBatches.set(color, []);
-      glowBatches.get(color)!.push({ sx, sy, r: r * 2.5 });
+      if (!this.isMobile) {
+        if (!glowBatches.has(color)) glowBatches.set(color, []);
+        glowBatches.get(color)!.push({ sx, sy, r: r * 2.5 });
+      }
 
       if (!solidBatches.has(color)) solidBatches.set(color, []);
       solidBatches.get(color)!.push({ sx, sy, r });
     });
 
-    // Draw glow halos
-    ctx.globalAlpha = 0.2;
-    for (const [color, items] of glowBatches) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      for (const item of items) {
-        ctx.moveTo(item.sx + item.r, item.sy);
-        ctx.arc(item.sx, item.sy, item.r, 0, Math.PI * 2);
+    // Draw glow halos (skip on mobile)
+    if (!this.isMobile) {
+      ctx.globalAlpha = 0.2;
+      for (const [color, items] of glowBatches) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        for (const item of items) {
+          ctx.moveTo(item.sx + item.r, item.sy);
+          ctx.arc(item.sx, item.sy, item.r, 0, Math.PI * 2);
+        }
+        ctx.fill();
       }
-      ctx.fill();
     }
 
     // Draw solid food
@@ -1211,14 +1545,15 @@ export class GameRenderer {
   // ─── Minimap ──────────────────────────────────────
 
   private drawMinimap(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    const SIZE = 200;
-    const PADDING = 15;
+    const SIZE = this.isMobile ? 130 : 200;
+    const PADDING = this.isMobile ? 10 : 15;
     const mx = W - SIZE - PADDING;
-    const my = H - SIZE - PADDING;
+    // Top-right, below Cash Out button area (~70px from top)
+    const my = this.isMobile ? 60 : 70;
     const scale = (SIZE - 20) / (this.arenaRadius * 2);
 
     ctx.save();
-    const r = 12;
+    const r = this.isMobile ? 8 : 12;
     ctx.beginPath();
     ctx.moveTo(mx + r, my);
     ctx.lineTo(mx + SIZE - r, my);
@@ -1254,13 +1589,13 @@ export class GameRenderer {
 
       if (id === this.mySessionId) {
         color = "#00FF66";
-        dotSize = 4;
+        dotSize = this.isMobile ? 3 : 4;
       } else if (snake.isBot) {
         color = "#888888";
-        dotSize = 2.5;
+        dotSize = this.isMobile ? 2 : 2.5;
       } else {
         color = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length][0];
-        dotSize = 3;
+        dotSize = this.isMobile ? 2.5 : 3;
       }
 
       ctx.fillStyle = color;
@@ -1288,8 +1623,5 @@ export class GameRenderer {
     this.audio.destroy();
     this.room.leave();
     this.canvas.remove();
-    if (this.joystickCanvas) {
-      this.joystickCanvas.remove();
-    }
   }
 }

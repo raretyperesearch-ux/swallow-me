@@ -14,6 +14,7 @@ export interface GameLoopCallbacks {
   onKill: (event: KillEvent) => void;
   onBoostFoodDrop: (x: number, y: number) => void;
   onFoodEaten: (foodIds: string[]) => void;
+  onFoodSpawned: (foods: ServerFood[]) => void;
 }
 
 let _debugTickCounter = 0;
@@ -81,6 +82,9 @@ export function runGameTick(
         foods.set(f.id, f);
       }
 
+      // Notify room of new death food for state sync
+      callbacks.onFoodSpawned(deathFoods);
+
       // If there's a killer (not wall), credit the kill
       if (kill.killer) {
         const killer = snakes.get(kill.killer);
@@ -106,7 +110,7 @@ export function runGameTick(
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
       eatenFoodIds.push(eat.foodId);
-      console.log(`[EAT] ${snake.name} ate food, length now ${Math.floor(snake.length)}`);
+      console.log(`[FOOD REMOVED] ${eat.foodId} eaten by ${snake.name}, length now ${Math.floor(snake.length)}`);
     }
   }
 
@@ -121,9 +125,14 @@ export function runGameTick(
       GAME_CONFIG.FOOD_SPAWN_RATE,
       GAME_CONFIG.MAX_FOOD - foods.size
     );
+    const newFoods: ServerFood[] = [];
     for (let i = 0; i < toSpawn; i++) {
       const f = spawnRandomFood(arenaRadius);
       foods.set(f.id, f);
+      newFoods.push(f);
+    }
+    if (newFoods.length > 0) {
+      callbacks.onFoodSpawned(newFoods);
     }
   }
 }

@@ -2,16 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+* {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
 html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
   touch-action: none;
   -webkit-overflow-scrolling: none;
   overscroll-behavior: none;
   background: #0a0a1a;
   user-select: none;
   -webkit-user-select: none;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
 }
 
 canvas {
