@@ -64,18 +64,18 @@ const FOOD_COLORS = [
 
 const NUM_BODY_SKINS = 13;
 
-// Vibrant high-contrast skin palettes (slither.io style)
-const SKIN_PALETTES: string[][] = [
-  ["#FF0000", "#FF8800", "#FFFF00", "#00FF00", "#0088FF", "#8800FF"], // rainbow (player default)
-  ["#0044FF", "#00AAFF", "#00FFFF", "#00AAFF"],  // blue/cyan
-  ["#FF0066", "#FF3399", "#FF66CC", "#FF3399"],  // hot pink
-  ["#00CC00", "#44FF00", "#AAFF00", "#44FF00"],  // green/lime
-  ["#FF6600", "#FFAA00", "#FFDD00", "#FFAA00"],  // gold/orange
-  ["#8800CC", "#AA44FF", "#DD88FF", "#AA44FF"],  // purple/violet
-  ["#FF0000", "#FFFFFF", "#FF0000", "#FFFFFF"],  // candy cane
-  ["#00DDDD", "#FFFFFF", "#00DDDD", "#FFFFFF"],  // cyan/white
-  ["#00FF44", "#003311", "#00FF44", "#003311"],  // neon green/black
-  ["#FF0000", "#FFFFFF", "#0044CC", "#FFFFFF"],  // USA flag
+// Solid snake body colors — one color per snake, clean look
+const SNAKE_COLORS: string[] = [
+  "#4488FF",  // blue (player default)
+  "#FF4466",  // pink/red
+  "#44FF66",  // green
+  "#FFAA00",  // gold
+  "#FF44FF",  // magenta
+  "#00DDDD",  // cyan
+  "#FF6600",  // orange
+  "#AA44FF",  // purple
+  "#00FF44",  // neon green
+  "#FFDD00",  // yellow
 ];
 
 function darkenColor(hex: string, factor: number): string {
@@ -516,7 +516,7 @@ export class GameRenderer {
   // ─── Death Particles ──────────────────────────────
 
   private spawnDeathParticles(worldX: number, worldY: number, skinId: number) {
-    const palette = SKIN_PALETTES[skinId % SKIN_PALETTES.length];
+    const color = SNAKE_COLORS[skinId % SNAKE_COLORS.length];
     for (let i = 0; i < 20; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 1 + Math.random() * 4;
@@ -525,7 +525,7 @@ export class GameRenderer {
         y: worldY,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        color: palette[Math.floor(Math.random() * palette.length)],
+        color,
         life: 1.0,
         size: 3 + Math.random() * 5,
       });
@@ -566,7 +566,7 @@ export class GameRenderer {
   private spawnBoostParticle(snake: LocalSnake) {
     if (snake.segments.length < 3) return;
     const tail = snake.segments[snake.segments.length - 1];
-    const palette = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length];
+    const color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     const angle = Math.random() * Math.PI * 2;
     const speed = 0.5 + Math.random() * 1.5;
     this.boostParticles.push({
@@ -574,7 +574,7 @@ export class GameRenderer {
       y: tail.y + (Math.random() - 0.5) * 8,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      color: palette[Math.floor(Math.random() * palette.length)],
+      color,
       life: 1.0,
       size: 2 + Math.random() * 4,
     });
@@ -1012,7 +1012,7 @@ export class GameRenderer {
     const dotSpacing = 14;
     const startX = W / 2 - (numDots * dotSpacing) / 2;
     const waveAmplitude = 12;
-    const snakeColors = SKIN_PALETTES[4]; // rainbow
+    const snakeColors = SNAKE_COLORS;
 
     for (let i = 0; i < numDots; i++) {
       const x = startX + i * dotSpacing;
@@ -1254,13 +1254,14 @@ export class GameRenderer {
 
     const bodyRadius = 12;
     const headRadius = 14;
-    const palette = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length];
+    const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
+    const outlineColor = darkenColor(snakeColor, 0.4);
     const bodyImg = this.bodyImages[snake.skinId % this.bodyImages.length];
     const hasSprite = bodyImg && bodyImg.complete;
-    const useGradient = !this.isMobile; // 3D shading only on desktop
+    const useGradient = !this.isMobile;
 
-    // --- BODY PASS (2-segment color bands, color-matched outlines) ---
-    ctx.globalAlpha = 1.0; // Full saturation always
+    // --- BODY PASS (uniform color, color-matched outline) ---
+    ctx.globalAlpha = 1.0;
     if (hasSprite) {
       const size = bodyRadius * 2;
       for (let i = snake.segments.length - 1; i >= 1; i--) {
@@ -1271,63 +1272,50 @@ export class GameRenderer {
         ctx.drawImage(bodyImg, sx - bodyRadius, sy - bodyRadius, size, size);
       }
     } else if (useGradient) {
-      // Desktop: per-segment with dark outline + radial gradient
+      // Desktop: per-segment dark outline + radial gradient, uniform color
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
         const sy = this.toScreenY(seg.y);
-        const colorIndex = Math.floor(i / 2) % palette.length;
-        const color = palette[colorIndex];
 
-        // Dark outline (color-matched)
+        // Dark outline
         ctx.beginPath();
         ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
-        ctx.fillStyle = darkenColor(color, 0.4);
+        ctx.fillStyle = outlineColor;
         ctx.fill();
 
         // 3D gradient fill
         const grad = ctx.createRadialGradient(sx - 2, sy - 2, 0, sx, sy, bodyRadius);
-        grad.addColorStop(0, lightenColor(color, 0.3));
-        grad.addColorStop(1, color);
+        grad.addColorStop(0, lightenColor(snakeColor, 0.3));
+        grad.addColorStop(1, snakeColor);
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
         ctx.fill();
       }
     } else {
-      // Mobile: flat batched fill (fast), 2-segment bands
-      const colorBands = new Map<string, { sx: number; sy: number }[]>();
+      // Mobile: single batched fill, uniform color
+      ctx.fillStyle = snakeColor;
+      ctx.beginPath();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const colorIndex = Math.floor(i / 2) % palette.length;
-        const color = palette[colorIndex];
-        if (!colorBands.has(color)) colorBands.set(color, []);
-        colorBands.get(color)!.push({
-          sx: this.toScreenX(seg.x),
-          sy: this.toScreenY(seg.y),
-        });
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        ctx.moveTo(sx + bodyRadius, sy);
+        ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
       }
-
-      for (const [color, segs] of colorBands) {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        for (const s of segs) {
-          ctx.moveTo(s.sx + bodyRadius, s.sy);
-          ctx.arc(s.sx, s.sy, bodyRadius, 0, Math.PI * 2);
-        }
-        ctx.fill();
-      }
+      ctx.fill();
     }
 
-    // --- HEAD (slither.io style: oval + big eyes with shine) ---
+    // --- HEAD (oval + big eyes with shine) ---
     const head = snake.segments[0];
     if (!this.isInView(head.x, head.y, 200)) return;
 
     const hsx = this.toScreenX(head.x);
     const hsy = this.toScreenY(head.y);
-    const skinColor = palette[0];
+    const skinColor = snakeColor;
 
     ctx.save();
     ctx.translate(hsx, hsy);
@@ -1560,7 +1548,7 @@ export class GameRenderer {
         color = "#888888";
         dotSize = this.isMobile ? 2 : 2.5;
       } else {
-        color = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length][0];
+        color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
         dotSize = this.isMobile ? 2.5 : 3;
       }
 
