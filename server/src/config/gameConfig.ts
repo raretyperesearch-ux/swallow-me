@@ -10,8 +10,8 @@ export const GAME_CONFIG = {
   BOUNDARY_KILL: true, // Die when hitting the wall
 
   // Snake movement (tuned for 30Hz — smooth, not snappy)
-  BASE_SPEED: 6.0, // Normal movement speed (units per tick)
-  BOOST_SPEED: 12.0, // Speed while boosting
+  BASE_SPEED: 8.0, // Normal movement speed (units per tick)
+  BOOST_SPEED: 16.0, // Speed while boosting
   TURN_RATE: 0.05, // Max radians per tick (responsive turning)
   BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
   MIN_BOOST_LENGTH: 15, // Can't boost below this length

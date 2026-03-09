@@ -85,6 +85,13 @@ function darkenColor(hex: string, factor: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+function lightenColor(hex: string, amount: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgb(${Math.min(255, Math.floor(r + (255 - r) * amount))},${Math.min(255, Math.floor(g + (255 - g) * amount))},${Math.min(255, Math.floor(b + (255 - b) * amount))})`;
+}
+
 function detectMobile(): boolean {
   return (
     navigator.maxTouchPoints > 0 ||
@@ -1082,7 +1089,7 @@ export class GameRenderer {
         snake.angle += angleDiff * 0.12; // smooth turning
 
         // Move head locally at predicted speed
-        const speed = snake.boosting ? 12.0 : 6.0;
+        const speed = snake.boosting ? 16.0 : 8.0;
         snake.headX += Math.cos(snake.angle) * speed;
         snake.headY += Math.sin(snake.angle) * speed;
 
@@ -1245,16 +1252,15 @@ export class GameRenderer {
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (!snake.alive || snake.segments.length < 2) return;
 
-    const bodyRadius = 12; // increased from 10 for 60%+ overlap with spacing=4
+    const bodyRadius = 12;
     const headRadius = 14;
     const palette = SKIN_PALETTES[snake.skinId % SKIN_PALETTES.length];
     const bodyImg = this.bodyImages[snake.skinId % this.bodyImages.length];
     const hasSprite = bodyImg && bodyImg.complete;
-    const skipOutline = this.isMobile; // skip outline on mobile for performance
+    const useGradient = !this.isMobile; // 3D shading only on desktop
 
-    // Draw from tail to head (head renders on top)
-    // --- OUTLINE PASS (2px larger darker circle behind each segment) ---
-    if (!hasSprite && !skipOutline) {
+    // --- OUTLINE PASS (desktop only) ---
+    if (!hasSprite && useGradient) {
       ctx.beginPath();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
@@ -1278,8 +1284,32 @@ export class GameRenderer {
         const sy = this.toScreenY(seg.y);
         ctx.drawImage(bodyImg, sx - bodyRadius, sy - bodyRadius, size, size);
       }
+    } else if (useGradient) {
+      // Desktop: per-segment radial gradient for 3D look
+      if (snake.boosting) {
+        ctx.globalAlpha = 0.8 + Math.sin(Date.now() / 80) * 0.2;
+      }
+      for (let i = snake.segments.length - 1; i >= 1; i--) {
+        const seg = snake.segments[i];
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        const colorIndex = Math.floor(i / 3) % palette.length;
+        const color = palette[colorIndex];
+
+        const grad = ctx.createRadialGradient(sx - 2, sy - 2, 0, sx, sy, bodyRadius);
+        grad.addColorStop(0, lightenColor(color, 0.3));
+        grad.addColorStop(1, color);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (snake.boosting) {
+        ctx.globalAlpha = 1.0;
+      }
     } else {
-      // Batch by color band for fewer state changes
+      // Mobile: flat batched fill (fast)
       const colorBands = new Map<string, { sx: number; sy: number }[]>();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
@@ -1293,10 +1323,8 @@ export class GameRenderer {
         });
       }
 
-      // Boost pulse: vary alpha between 0.8 and 1.0
       if (snake.boosting) {
-        const pulseAlpha = 0.8 + Math.sin(Date.now() / 80) * 0.2;
-        ctx.globalAlpha = pulseAlpha;
+        ctx.globalAlpha = 0.8 + Math.sin(Date.now() / 80) * 0.2;
       }
 
       for (const [color, segs] of colorBands) {
@@ -1314,61 +1342,78 @@ export class GameRenderer {
       }
     }
 
-    // --- HEAD ---
+    // --- HEAD (slither.io style: oval + big eyes with shine) ---
     const head = snake.segments[0];
     if (!this.isInView(head.x, head.y, 200)) return;
 
     const hsx = this.toScreenX(head.x);
     const hsy = this.toScreenY(head.y);
+    const skinColor = palette[0];
 
-    // Head outline
-    if (!skipOutline) {
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.beginPath();
-      ctx.arc(hsx, hsy, headRadius + 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    ctx.save();
+    ctx.translate(hsx, hsy);
+    ctx.rotate(snake.angle);
 
-    if (this.headImage && this.headImage.complete) {
-      const headSize = headRadius * 2.6;
-      ctx.save();
-      ctx.translate(hsx, hsy);
-      ctx.rotate(snake.angle - Math.PI / 2);
-      ctx.drawImage(this.headImage, -headSize / 2, -headSize / 2, headSize, headSize);
-      ctx.restore();
-    } else {
-      // Flat head with eyes
-      ctx.fillStyle = palette[0];
-      ctx.beginPath();
-      ctx.arc(hsx, hsy, headRadius, 0, Math.PI * 2);
-      ctx.fill();
+    // Oval head shape
+    ctx.beginPath();
+    ctx.ellipse(0, 0, headRadius * 1.4, headRadius * 1.1, 0, 0, Math.PI * 2);
+    ctx.fillStyle = skinColor;
+    ctx.fill();
+    ctx.strokeStyle = darkenColor(skinColor, 0.4);
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
-      // Eyes
-      const eyeOffset = headRadius * 0.5;
-      const angle = snake.angle;
-      const eyeAngle1 = angle + 0.4;
-      const eyeAngle2 = angle - 0.4;
+    // Eye parameters
+    const eyeOffsetX = headRadius * 0.3;
+    const eyeOffsetY = headRadius * 0.45;
+    const eyeRadius = headRadius * 0.38;
+    const pupilRadius = headRadius * 0.2;
 
-      // White
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.arc(hsx + Math.cos(eyeAngle1) * eyeOffset, hsy + Math.sin(eyeAngle1) * eyeOffset, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(hsx + Math.cos(eyeAngle2) * eyeOffset, hsy + Math.sin(eyeAngle2) * eyeOffset, 4, 0, Math.PI * 2);
-      ctx.fill();
+    // Left eye (top side when angle=0)
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX, -eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = "#333333";
+    ctx.lineWidth = 1;
+    ctx.stroke();
 
-      // Pupils
-      ctx.fillStyle = "#000000";
-      ctx.beginPath();
-      ctx.arc(hsx + Math.cos(eyeAngle1) * (eyeOffset + 2), hsy + Math.sin(eyeAngle1) * (eyeOffset + 2), 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(hsx + Math.cos(eyeAngle2) * (eyeOffset + 2), hsy + Math.sin(eyeAngle2) * (eyeOffset + 2), 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // Left pupil
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX + pupilRadius * 0.3, -eyeOffsetY, pupilRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#000000";
+    ctx.fill();
 
-    // Boost glow
+    // Left eye shine
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX + pupilRadius * 0.1, -eyeOffsetY - pupilRadius * 0.3, pupilRadius * 0.3, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+
+    // Right eye (bottom side when angle=0)
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX, eyeOffsetY, eyeRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = "#333333";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Right pupil
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX + pupilRadius * 0.3, eyeOffsetY, pupilRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#000000";
+    ctx.fill();
+
+    // Right eye shine
+    ctx.beginPath();
+    ctx.arc(eyeOffsetX + pupilRadius * 0.1, eyeOffsetY - pupilRadius * 0.3, pupilRadius * 0.3, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+
+    ctx.restore();
+
+    // Boost glow (behind head, in world coords)
     if (snake.boosting && isMe) {
       const gradient = ctx.createRadialGradient(hsx, hsy, 0, hsx, hsy, headRadius * 5);
       gradient.addColorStop(0, "rgba(255, 255, 100, 0.15)");
