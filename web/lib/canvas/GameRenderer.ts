@@ -64,18 +64,18 @@ const FOOD_COLORS = [
 
 const NUM_BODY_SKINS = 13;
 
-// Multi-color skin palettes for alternating body bands
+// Vibrant high-contrast skin palettes (slither.io style)
 const SKIN_PALETTES: string[][] = [
-  ["#4488ff", "#66aaff", "#ffffff", "#66aaff"],  // blue
-  ["#ff4466", "#ff6688", "#ffaacc", "#ff6688"],  // pink
-  ["#44ff66", "#88ff88", "#ffffff", "#88ff88"],  // green
-  ["#ffaa00", "#ffcc44", "#ffffff", "#ffcc44"],  // gold
-  ["#ff0000", "#ff8800", "#ffff00", "#00ff00", "#0088ff", "#8800ff"], // rainbow
-  ["#ff44ff", "#ff88ff", "#ffffff", "#ff88ff"],  // magenta
-  ["#00ffff", "#44ffff", "#ffffff", "#44ffff"],  // cyan
-  ["#ff6600", "#ff8844", "#ffcc88", "#ff8844"],  // orange
-  ["#aa44ff", "#cc88ff", "#ffffff", "#cc88ff"],  // purple
-  ["#ff4444", "#44ff44", "#4444ff", "#ffff44"],  // multi
+  ["#FF0000", "#FF8800", "#FFFF00", "#00FF00", "#0088FF", "#8800FF"], // rainbow (player default)
+  ["#0044FF", "#00AAFF", "#00FFFF", "#00AAFF"],  // blue/cyan
+  ["#FF0066", "#FF3399", "#FF66CC", "#FF3399"],  // hot pink
+  ["#00CC00", "#44FF00", "#AAFF00", "#44FF00"],  // green/lime
+  ["#FF6600", "#FFAA00", "#FFDD00", "#FFAA00"],  // gold/orange
+  ["#8800CC", "#AA44FF", "#DD88FF", "#AA44FF"],  // purple/violet
+  ["#FF0000", "#FFFFFF", "#FF0000", "#FFFFFF"],  // candy cane
+  ["#00DDDD", "#FFFFFF", "#00DDDD", "#FFFFFF"],  // cyan/white
+  ["#00FF44", "#003311", "#00FF44", "#003311"],  // neon green/black
+  ["#FF0000", "#FFFFFF", "#0044CC", "#FFFFFF"],  // USA flag
 ];
 
 function darkenColor(hex: string, factor: number): string {
@@ -1259,22 +1259,8 @@ export class GameRenderer {
     const hasSprite = bodyImg && bodyImg.complete;
     const useGradient = !this.isMobile; // 3D shading only on desktop
 
-    // --- OUTLINE PASS (desktop only) ---
-    if (!hasSprite && useGradient) {
-      ctx.beginPath();
-      for (let i = snake.segments.length - 1; i >= 1; i--) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        ctx.moveTo(sx + bodyRadius + 2, sy);
-        ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
-      }
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fill();
-    }
-
-    // --- BODY PASS ---
+    // --- BODY PASS (2-segment color bands, color-matched outlines) ---
+    ctx.globalAlpha = 1.0; // Full saturation always
     if (hasSprite) {
       const size = bodyRadius * 2;
       for (let i = snake.segments.length - 1; i >= 1; i--) {
@@ -1285,18 +1271,22 @@ export class GameRenderer {
         ctx.drawImage(bodyImg, sx - bodyRadius, sy - bodyRadius, size, size);
       }
     } else if (useGradient) {
-      // Desktop: per-segment radial gradient for 3D look
-      if (snake.boosting) {
-        ctx.globalAlpha = 0.8 + Math.sin(Date.now() / 80) * 0.2;
-      }
+      // Desktop: per-segment with dark outline + radial gradient
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
         const sy = this.toScreenY(seg.y);
-        const colorIndex = Math.floor(i / 3) % palette.length;
+        const colorIndex = Math.floor(i / 2) % palette.length;
         const color = palette[colorIndex];
 
+        // Dark outline (color-matched)
+        ctx.beginPath();
+        ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
+        ctx.fillStyle = darkenColor(color, 0.4);
+        ctx.fill();
+
+        // 3D gradient fill
         const grad = ctx.createRadialGradient(sx - 2, sy - 2, 0, sx, sy, bodyRadius);
         grad.addColorStop(0, lightenColor(color, 0.3));
         grad.addColorStop(1, color);
@@ -1305,26 +1295,19 @@ export class GameRenderer {
         ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
         ctx.fill();
       }
-      if (snake.boosting) {
-        ctx.globalAlpha = 1.0;
-      }
     } else {
-      // Mobile: flat batched fill (fast)
+      // Mobile: flat batched fill (fast), 2-segment bands
       const colorBands = new Map<string, { sx: number; sy: number }[]>();
       for (let i = snake.segments.length - 1; i >= 1; i--) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const colorIndex = Math.floor(i / 3) % palette.length;
+        const colorIndex = Math.floor(i / 2) % palette.length;
         const color = palette[colorIndex];
         if (!colorBands.has(color)) colorBands.set(color, []);
         colorBands.get(color)!.push({
           sx: this.toScreenX(seg.x),
           sy: this.toScreenY(seg.y),
         });
-      }
-
-      if (snake.boosting) {
-        ctx.globalAlpha = 0.8 + Math.sin(Date.now() / 80) * 0.2;
       }
 
       for (const [color, segs] of colorBands) {
@@ -1335,10 +1318,6 @@ export class GameRenderer {
           ctx.arc(s.sx, s.sy, bodyRadius, 0, Math.PI * 2);
         }
         ctx.fill();
-      }
-
-      if (snake.boosting) {
-        ctx.globalAlpha = 1.0;
       }
     }
 

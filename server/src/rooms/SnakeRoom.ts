@@ -110,7 +110,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       spawn.y,
       tierConfig.entryAmount,
       false,
-      Math.floor(Math.random() * 10)
+      0 // Player always gets rainbow skin (index 0)
     );
 
     this.serverSnakes.set(client.sessionId, snake);
@@ -337,7 +337,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       spawn.y,
       tierConfig.entryAmount,
       true,
-      Math.floor(Math.random() * 10)
+      1 + Math.floor(Math.random() * 9) // Skins 1-9, rainbow (0) reserved for player
     );
 
     this.serverSnakes.set(botId, bot);
