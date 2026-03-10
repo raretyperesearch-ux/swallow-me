@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, ReactNode } from "react";
 import * as Colyseus from "colyseus.js";
 
 interface SnakeGameProps {
   room: Colyseus.Room;
   onDeath: (data: any) => void;
   onCashout: (data: any) => void;
+  overlay?: ReactNode;
 }
 
 function isMobileDevice(): boolean {
@@ -17,7 +18,7 @@ function isMobileDevice(): boolean {
   );
 }
 
-export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) {
+export default function SnakeGame({ room, onDeath, onCashout, overlay }: SnakeGameProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<any>(null);
   const [stats, setStats] = useState({ kills: 0, value: 0, alive: 0, length: 50, muted: false });
@@ -60,68 +61,73 @@ export default function SnakeGame({ room, onDeath, onCashout }: SnakeGameProps) 
       {/* Game canvas */}
       <div ref={containerRef} className="w-full h-full" />
 
-      {/* HUD Overlay — single row, no overflow */}
-      <div
-        className="absolute top-0 left-0 right-0 flex items-start pointer-events-none"
-        style={{
-          padding: mobile
-            ? "env(safe-area-inset-top, 6px) 10px 0 env(safe-area-inset-left, 6px)"
-            : "12px 16px 0 16px",
-          gap: mobile ? "4px" : "12px",
-        }}
-      >
-        {/* Balance */}
-        <div className={`bg-black/70 backdrop-blur-sm shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-4 py-2"}`}>
-          <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-sm text-gray-400"}>Balance</div>
-          <div className={mobile ? "text-[13px] font-bold text-green-400 leading-tight" : "text-2xl font-bold text-green-400"}>
-            ${stats.value.toFixed(2)}
-          </div>
-        </div>
+      {/* Death/cashout overlay rendered on top of live canvas */}
+      {overlay}
 
-        {/* Length */}
-        <div className={`bg-black/70 backdrop-blur-sm shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-3 py-2"}`}>
-          <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-sm text-gray-400"}>Len</div>
-          <div className={mobile ? "text-[13px] font-bold text-white leading-tight" : "text-2xl font-bold text-white"}>
-            {stats.length}
-          </div>
-        </div>
-
-        {/* Kills */}
-        <div className={`bg-black/70 backdrop-blur-sm text-center shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-3 py-2"}`}>
-          <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-xs text-gray-400"}>Kills</div>
-          <div className={mobile ? "text-[12px] font-bold text-white leading-tight" : "text-lg font-bold text-white"}>{stats.kills}</div>
-        </div>
-
-        {/* Alive */}
-        <div className={`bg-black/70 backdrop-blur-sm text-center shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-3 py-2"}`}>
-          <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-xs text-gray-400"}>Alive</div>
-          <div className={mobile ? "text-[12px] font-bold text-white leading-tight" : "text-lg font-bold text-white"}>{stats.alive}</div>
-        </div>
-
-        {/* Spacer */}
-        <div className="flex-1" />
-
-        {/* Mute */}
-        <button
-          onClick={handleToggleMute}
-          className={`pointer-events-auto bg-black/70 hover:bg-black/90 text-white font-bold rounded-full transition-colors backdrop-blur-sm flex items-center justify-center shrink-0 ${
-            mobile ? "w-7 h-7 text-[10px]" : "w-10 h-10 text-base"
-          }`}
-          title={stats.muted ? "Unmute" : "Mute"}
+      {/* HUD Overlay — single row, no overflow (hidden when overlay is showing) */}
+      {!overlay && (
+        <div
+          className="absolute top-0 left-0 right-0 flex items-start pointer-events-none"
+          style={{
+            padding: mobile
+              ? "env(safe-area-inset-top, 6px) 10px 0 env(safe-area-inset-left, 6px)"
+              : "12px 16px 0 16px",
+            gap: mobile ? "4px" : "12px",
+          }}
         >
-          {stats.muted ? "\u{1F507}" : "\u{1F50A}"}
-        </button>
+          {/* Balance */}
+          <div className={`bg-black/70 backdrop-blur-sm shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-4 py-2"}`}>
+            <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-sm text-gray-400"}>Balance</div>
+            <div className={mobile ? "text-[13px] font-bold text-green-400 leading-tight" : "text-2xl font-bold text-green-400"}>
+              ${stats.value.toFixed(2)}
+            </div>
+          </div>
 
-        {/* Cash Out — pill shape */}
-        <button
-          onClick={handleCashout}
-          className={`pointer-events-auto bg-green-500 hover:bg-green-400 text-black font-bold rounded-full transition-colors shrink-0 ${
-            mobile ? "px-2.5 h-[30px] text-[11px] leading-none" : "px-5 py-2.5 text-sm"
-          }`}
-        >
-          {mobile ? `Cash $${stats.value.toFixed(2)}` : `Cash Out $${stats.value.toFixed(2)}`}
-        </button>
-      </div>
+          {/* Length */}
+          <div className={`bg-black/70 backdrop-blur-sm shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-3 py-2"}`}>
+            <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-sm text-gray-400"}>Len</div>
+            <div className={mobile ? "text-[13px] font-bold text-white leading-tight" : "text-2xl font-bold text-white"}>
+              {stats.length}
+            </div>
+          </div>
+
+          {/* Kills */}
+          <div className={`bg-black/70 backdrop-blur-sm text-center shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-3 py-2"}`}>
+            <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-xs text-gray-400"}>Kills</div>
+            <div className={mobile ? "text-[12px] font-bold text-white leading-tight" : "text-lg font-bold text-white"}>{stats.kills}</div>
+          </div>
+
+          {/* Alive */}
+          <div className={`bg-black/70 backdrop-blur-sm text-center shrink-0 ${mobile ? "rounded-md px-1.5 py-0.5" : "rounded-lg px-3 py-2"}`}>
+            <div className={mobile ? "text-[9px] text-gray-400 leading-tight" : "text-xs text-gray-400"}>Alive</div>
+            <div className={mobile ? "text-[12px] font-bold text-white leading-tight" : "text-lg font-bold text-white"}>{stats.alive}</div>
+          </div>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Mute */}
+          <button
+            onClick={handleToggleMute}
+            className={`pointer-events-auto bg-black/70 hover:bg-black/90 text-white font-bold rounded-full transition-colors backdrop-blur-sm flex items-center justify-center shrink-0 ${
+              mobile ? "w-7 h-7 text-[10px]" : "w-10 h-10 text-base"
+            }`}
+            title={stats.muted ? "Unmute" : "Mute"}
+          >
+            {stats.muted ? "\u{1F507}" : "\u{1F50A}"}
+          </button>
+
+          {/* Cash Out — pill shape */}
+          <button
+            onClick={handleCashout}
+            className={`pointer-events-auto bg-green-500 hover:bg-green-400 text-black font-bold rounded-full transition-colors shrink-0 ${
+              mobile ? "px-2.5 h-[30px] text-[11px] leading-none" : "px-5 py-2.5 text-sm"
+            }`}
+          >
+            {mobile ? `Cash $${stats.value.toFixed(2)}` : `Cash Out $${stats.value.toFixed(2)}`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -96,104 +96,100 @@ export default function PlayPage() {
     );
   }
 
-  // ─── Playing Phase ──────────────────────────────────
-  if (phase === "playing" && room) {
+  // ─── Death Overlay (rendered inside SnakeGame) ─────
+  const deathOverlay = phase === "dead" ? (
+    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white z-50 animate-fadeIn">
+      <h2 className="text-4xl font-black text-red-400 mb-4">SWALLOWED</h2>
+      <p className="text-gray-400 mb-6">
+        Killed by <span className="text-white font-bold">{deathData?.killerName || "Unknown"}</span>
+      </p>
+
+      <div className="flex gap-6 mb-8">
+        <div className="text-center">
+          <div className="text-2xl font-bold">{deathData?.kills || 0}</div>
+          <div className="text-xs text-gray-400">Kills</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold">
+            {Math.floor((deathData?.duration || 0) / 1000)}s
+          </div>
+          <div className="text-xs text-gray-400">Survived</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-red-400">
+            -${((deathData?.valueUsdc || 0) / 1_000_000).toFixed(2)}
+          </div>
+          <div className="text-xs text-gray-400">Lost</div>
+        </div>
+      </div>
+
+      <div className="flex gap-4">
+        <button
+          onClick={handlePlayAgain}
+          className="bg-green-500 hover:bg-green-400 text-black font-bold px-8 py-3 rounded-lg"
+        >
+          Play Again
+        </button>
+        <button
+          onClick={() => {
+            const text = `I just got swallowed on SwallowMe.gg! ${deathData?.kills || 0} kills before going down.`;
+            window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
+          }}
+          className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
+        >
+          Share to X
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  // ─── Cashout Overlay (rendered inside SnakeGame) ───
+  const cashoutOverlay = phase === "cashout" ? (
+    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white z-50 animate-fadeIn">
+      <h2 className="text-4xl font-black text-green-400 mb-4">CASHED OUT</h2>
+
+      <div className="flex gap-6 mb-8">
+        <div className="text-center">
+          <div className="text-3xl font-bold text-green-400">
+            ${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)}
+          </div>
+          <div className="text-xs text-gray-400">Withdrawn</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold">{cashoutData?.kills || 0}</div>
+          <div className="text-xs text-gray-400">Kills</div>
+        </div>
+      </div>
+
+      <div className="flex gap-4">
+        <button
+          onClick={handlePlayAgain}
+          className="bg-green-500 hover:bg-green-400 text-black font-bold px-8 py-3 rounded-lg"
+        >
+          Play Again
+        </button>
+        <button
+          onClick={() => {
+            const text = `Just cashed out $${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)} on SwallowMe.gg!`;
+            window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
+          }}
+          className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
+        >
+          Brag on X
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  // ─── Playing / Dead / Cashout — canvas stays alive ──
+  if ((phase === "playing" || phase === "dead" || phase === "cashout") && room) {
     return (
       <SnakeGame
         room={room}
         onDeath={handleDeath}
         onCashout={handleCashout}
+        overlay={deathOverlay || cashoutOverlay}
       />
-    );
-  }
-
-  // ─── Death Screen ───────────────────────────────────
-  if (phase === "dead") {
-    return (
-      <div className="min-h-screen bg-[#0a0a1a] flex flex-col items-center justify-center text-white">
-        <h2 className="text-4xl font-black text-red-400 mb-4">SWALLOWED</h2>
-        <p className="text-gray-400 mb-6">
-          Killed by <span className="text-white font-bold">{deathData?.killerName || "Unknown"}</span>
-        </p>
-
-        <div className="flex gap-6 mb-8">
-          <div className="text-center">
-            <div className="text-2xl font-bold">{deathData?.kills || 0}</div>
-            <div className="text-xs text-gray-400">Kills</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-bold">
-              {Math.floor((deathData?.duration || 0) / 1000)}s
-            </div>
-            <div className="text-xs text-gray-400">Survived</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-bold text-red-400">
-              -${((deathData?.valueUsdc || 0) / 1_000_000).toFixed(2)}
-            </div>
-            <div className="text-xs text-gray-400">Lost</div>
-          </div>
-        </div>
-
-        <div className="flex gap-4">
-          <button
-            onClick={handlePlayAgain}
-            className="bg-green-500 hover:bg-green-400 text-black font-bold px-8 py-3 rounded-lg"
-          >
-            Play Again
-          </button>
-          <button
-            onClick={() => {
-              // TODO: Share to X
-              const text = `I just got swallowed on SwallowMe.gg! ${deathData?.kills || 0} kills before going down.`;
-              window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
-            }}
-            className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
-          >
-            Share to X
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ─── Cashout Screen ─────────────────────────────────
-  if (phase === "cashout") {
-    return (
-      <div className="min-h-screen bg-[#0a0a1a] flex flex-col items-center justify-center text-white">
-        <h2 className="text-4xl font-black text-green-400 mb-4">CASHED OUT</h2>
-
-        <div className="flex gap-6 mb-8">
-          <div className="text-center">
-            <div className="text-3xl font-bold text-green-400">
-              ${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)}
-            </div>
-            <div className="text-xs text-gray-400">Withdrawn</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-bold">{cashoutData?.kills || 0}</div>
-            <div className="text-xs text-gray-400">Kills</div>
-          </div>
-        </div>
-
-        <div className="flex gap-4">
-          <button
-            onClick={handlePlayAgain}
-            className="bg-green-500 hover:bg-green-400 text-black font-bold px-8 py-3 rounded-lg"
-          >
-            Play Again
-          </button>
-          <button
-            onClick={() => {
-              const text = `Just cashed out $${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)} on SwallowMe.gg! 🐍💰`;
-              window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
-            }}
-            className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
-          >
-            Brag on X
-          </button>
-        </div>
-      </div>
     );
   }
 

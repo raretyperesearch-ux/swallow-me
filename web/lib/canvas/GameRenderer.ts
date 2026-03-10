@@ -275,8 +275,8 @@ export class GameRenderer {
   private foodGlowSmall: HTMLCanvasElement[] = [];   // radius ~6
   private foodGlowLarge: HTMLCanvasElement[] = [];   // radius ~10 (death food)
 
-  // Death particles (pre-allocated pool)
-  private deathPool: PooledParticle[] = createParticlePool(400);
+  // Death particles (pre-allocated pool — large for full-body explosions)
+  private deathPool: PooledParticle[] = createParticlePool(1200);
 
   // Boost particles (pre-allocated pool)
   private boostPool: PooledParticle[] = createParticlePool(200);
@@ -371,6 +371,13 @@ export class GameRenderer {
   // FPS cap for mobile
   private lastRenderTime: number = 0;
   private targetFrameInterval: number = 0; // 0 = uncapped
+
+  // Death animation state
+  private deathAnimating: boolean = false;
+  private deathAnimTimer: number = 0;
+  private deathAnimData: any = null;
+  private deathCamX: number = 0;
+  private deathCamY: number = 0;
 
   // Callbacks
   public onDeath?: (data: any) => void;
@@ -569,7 +576,25 @@ export class GameRenderer {
 
     this.room.onMessage("death", (data: any) => {
       this.audio.playDeath();
-      this.onDeath?.(data);
+      // Spawn full-body explosion along all segments
+      const me = this.localSnakes.get(this.mySessionId);
+      if (me && me.segments.length > 0) {
+        const color = SNAKE_COLORS[me.skinId % SNAKE_COLORS.length];
+        // Emit 2-3 particles per segment along the entire body
+        const step = Math.max(1, Math.floor(me.segments.length / 400)); // cap total particles
+        for (let i = 0; i < me.segments.length; i += step) {
+          const seg = me.segments[i];
+          this.emitPool(this.deathPool, seg.x, seg.y, 2, color, 3, 2.0, 4, 10);
+        }
+        // Lock camera at death position
+        this.deathCamX = me.headX;
+        this.deathCamY = me.headY;
+      }
+      this.shakeLife = 0.3;
+      // Start death animation — delay showing overlay
+      this.deathAnimating = true;
+      this.deathAnimTimer = 2.5;
+      this.deathAnimData = data;
     });
     this.room.onMessage("cashout_success", (data: any) => { this.onCashout?.(data); });
   }
@@ -1254,10 +1279,24 @@ export class GameRenderer {
       this.shakeY = 0;
     }
 
+    // Death animation countdown
+    if (this.deathAnimating) {
+      this.deathAnimTimer -= dt;
+      if (this.deathAnimTimer <= 0) {
+        this.deathAnimating = false;
+        this.onDeath?.(this.deathAnimData);
+        this.deathAnimData = null;
+      }
+    }
+
     // Camera — smooth follow + dynamic zoom (dt-based)
     const camLerp = 1 - Math.pow(0.0001, dt);
     const me = this.localSnakes.get(this.mySessionId);
-    if (me && me.alive) {
+    if (this.deathAnimating || (this.deathAnimData === null && !me?.alive && this.deathCamX !== 0)) {
+      // Hold camera at death position with shake
+      this.camX = this.deathCamX + this.shakeX;
+      this.camY = this.deathCamY + this.shakeY;
+    } else if (me && me.alive) {
       this.camX += (me.headX - this.camX) * camLerp + this.shakeX;
       this.camY += (me.headY - this.camY) * camLerp + this.shakeY;
 
