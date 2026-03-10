@@ -11,6 +11,8 @@ export interface ServerSnake {
   wallet: string;
   headX: number;
   headY: number;
+  prevHeadX: number;
+  prevHeadY: number;
   angle: number;
   targetAngle: number;
   speed: number;
@@ -53,6 +55,8 @@ export function createSnake(
     wallet,
     headX: spawnX,
     headY: spawnY,
+    prevHeadX: spawnX,
+    prevHeadY: spawnY,
     angle,
     targetAngle: angle,
     speed: GAME_CONFIG.BASE_SPEED,
@@ -98,6 +102,10 @@ export function updateSnake(snake: ServerSnake): void {
     snake.speed = GAME_CONFIG.BASE_SPEED;
     snake.boosting = false;
   }
+
+  // Save previous position for swept collision detection
+  snake.prevHeadX = snake.headX;
+  snake.prevHeadY = snake.headY;
 
   // Move head
   snake.headX += Math.cos(snake.angle) * snake.speed;
