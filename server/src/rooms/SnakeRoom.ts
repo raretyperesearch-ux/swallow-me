@@ -17,6 +17,8 @@ interface ClientViewport {
 }
 
 export class SnakeRoom extends Room<SnakeRoomState> {
+  patchRate = 40; // ms between state patches (was default 50ms)
+
   // Server-side state (not synced — full precision, per-room instance)
   private serverSnakes = new Map<string, ServerSnake>();
   private serverFoods = new Map<string, ServerFood>();
@@ -222,6 +224,16 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         console.log(
           `[Kill] ${killer.name} swallowed ${victim.name} → +$${(payoutAmount / 1_000_000).toFixed(2)}`
         );
+
+        // Broadcast exact server positions so clients snap to correct kill location
+        this.broadcast("kill-visual", {
+          killerSessionId: event.killer,
+          victimSessionId: event.victim,
+          killerX: killer.headX,
+          killerY: killer.headY,
+          victimX: victim.headX,
+          victimY: victim.headY,
+        });
       }
     } else {
       console.log(

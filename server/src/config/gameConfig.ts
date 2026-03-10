@@ -3,7 +3,7 @@
 export const GAME_CONFIG = {
   // Tick rate
   TICK_RATE: 30, // Server physics updates per second
-  CLIENT_SEND_RATE: 15, // State sync pushes per second
+  CLIENT_SEND_RATE: 20, // State sync pushes per second
 
   // Arena
   ARENA_RADIUS: 5000, // Circular map radius in game units
@@ -28,11 +28,11 @@ export const GAME_CONFIG = {
   TURN_RADIUS_SCALE: 0.15, // Additional radius per length unit
 
   // Food
-  INITIAL_FOOD_COUNT: 1000, // Food orbs at game start
-  MAX_FOOD: 2000, // Cap on total food
-  FOOD_VALUE: 1.0, // Length gained per food eaten
-  DEATH_FOOD_COUNT: 25, // Food orbs dropped on death
-  FOOD_SPAWN_RATE: 5, // New food per tick when below minimum
+  INITIAL_FOOD_COUNT: 600, // Food orbs at game start
+  MAX_FOOD: 1200, // Cap on total food
+  FOOD_VALUE: 0.5, // Length gained per food eaten
+  DEATH_FOOD_COUNT: 15, // Food orbs dropped on death
+  FOOD_SPAWN_RATE: 3, // New food per tick when below minimum
 
   // Lobby
   MIN_PLAYERS_TO_START: 3, // Real + bots needed
