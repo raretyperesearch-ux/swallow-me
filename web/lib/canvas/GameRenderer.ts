@@ -1776,17 +1776,19 @@ export class GameRenderer {
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
       const isDeath = food.size === 2;
-      const baseSize = (isDeath ? 10 : 6) * this.zoom;
-      const pulse = 1 + Math.sin(time / 400 + food.x * 0.1 + food.y * 0.1) * 0.2;
+      const baseSize = (isDeath ? 14 : 6) * this.zoom;
+      const pulseAmp = isDeath ? 0.3 : 0.2;
+      const pulse = 1 + Math.sin(time / 400 + food.x * 0.1 + food.y * 0.1) * pulseAmp;
       const r = baseSize * pulse;
       const colorIdx = Math.abs(Math.floor(food.x * 7 + food.y * 13)) % FOOD_COLORS.length;
 
-      // Draw pre-rendered glow circle (desktop only, GPU-accelerated drawImage)
+      // Draw pre-rendered glow circle (GPU-accelerated drawImage)
       if (drawGlow) {
         const glowImg = isDeath ? this.foodGlowLarge[colorIdx] : this.foodGlowSmall[colorIdx];
         if (glowImg) {
-          const glowSize = r * 4;
-          ctx.globalAlpha = glowAlpha;
+          const glowMult = isDeath ? 6 : 4;
+          const glowSize = r * glowMult;
+          ctx.globalAlpha = isDeath ? 0.5 : glowAlpha;
           ctx.drawImage(glowImg, sx - glowSize / 2, sy - glowSize / 2, glowSize, glowSize);
         }
       }
