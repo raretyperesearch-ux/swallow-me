@@ -83,9 +83,16 @@ export function updateSnake(snake: ServerSnake): void {
   while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
   while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
+  // Minimum turn radius scales with size — bigger snakes turn wider
+  // v = ω * r → ω = v / r. Clamp turn rate to enforce minimum circle radius.
+  const minRadius = GAME_CONFIG.MIN_TURN_RADIUS + snake.length * GAME_CONFIG.TURN_RADIUS_SCALE;
+  const currentSpeed = snake.boosting ? GAME_CONFIG.BOOST_SPEED : GAME_CONFIG.BASE_SPEED;
+  const maxTurnRate = currentSpeed / minRadius;
+  const effectiveTurnRate = Math.min(GAME_CONFIG.TURN_RATE, maxTurnRate);
+
   // Apply turn rate limit
-  if (Math.abs(angleDiff) > GAME_CONFIG.TURN_RATE) {
-    snake.angle += Math.sign(angleDiff) * GAME_CONFIG.TURN_RATE;
+  if (Math.abs(angleDiff) > effectiveTurnRate) {
+    snake.angle += Math.sign(angleDiff) * effectiveTurnRate;
   } else {
     snake.angle = snake.targetAngle;
   }

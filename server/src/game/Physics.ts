@@ -59,9 +59,9 @@ function lineCircleIntersect(
   return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1) || (t1 < 0 && t2 > 1);
 }
 
-// Reusable spatial grids
-const bodyGrid = new SpatialGrid(100);
-const foodGrid = new SpatialGrid(100);
+// Reusable spatial grids — cell size 50 for tighter broad phase
+const bodyGrid = new SpatialGrid(50);
+const foodGrid = new SpatialGrid(50);
 
 /**
  * Check all head-to-body collisions between snakes.
@@ -84,7 +84,9 @@ export function checkSnakeCollisions(
   }
 
   // NARROW PHASE: Swept line-circle test from prevHead to head against body segments
-  const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.1;
+  // 1.3x multiplier — slightly generous, but for real money missed kills are worse than false kills
+  const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.3;
+  const collisionDistSq = collisionDist * collisionDist;
 
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
@@ -113,11 +115,13 @@ export function checkSnakeCollisions(
       const other = snakes.get(otherId);
       if (!other || !other.alive) continue;
 
-      // Swept check: test line segment (prevHead → head) against each body circle
+      // Belt-and-suspenders: swept line-circle OR point-distance check
       for (let i = 1; i < other.segments.length; i++) {
         const seg = other.segments[i];
+        const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, collisionDist);
+        const pointHit = distanceSq(headX, headY, seg.x, seg.y) < collisionDistSq;
 
-        if (lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, collisionDist)) {
+        if (sweptHit || pointHit) {
           kills.push({
             killer: otherId,
             victim: id,

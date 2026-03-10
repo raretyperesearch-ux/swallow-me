@@ -6,7 +6,7 @@ export class SpatialGrid {
   private cellSize: number;
   private cells: Map<string, string[]>;
 
-  constructor(cellSize: number = 300) {
+  constructor(cellSize: number = 50) {
     this.cellSize = cellSize;
     this.cells = new Map();
   }

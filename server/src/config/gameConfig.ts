@@ -21,7 +21,11 @@ export const GAME_CONFIG = {
   MAX_LENGTH: 500, // Cap to prevent perf issues
   SEGMENT_SPACING: 4, // Distance between body segments
   HEAD_RADIUS: 14, // Collision radius of the head
-  BODY_RADIUS: 12, // Collision radius of body segments
+  BODY_RADIUS: 14, // Collision radius of body segments (matches visual)
+
+  // Turn radius scaling — bigger snakes turn wider, prevents infinite 360 spinning
+  MIN_TURN_RADIUS: 30, // Minimum circle radius in world units (small snakes)
+  TURN_RADIUS_SCALE: 0.15, // Additional radius per length unit
 
   // Food
   INITIAL_FOOD_COUNT: 1000, // Food orbs at game start
