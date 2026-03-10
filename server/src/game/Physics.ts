@@ -124,8 +124,7 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // HEAD vs BODY: brute force with dynamic radius matching client visuals
-  // 1.5x multiplier accounts for client prediction drift from server positions
+  // HEAD vs BODY: brute force — exact visual radius match, NO multiplier
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
 
@@ -139,7 +138,7 @@ export function checkSnakeCollisions(
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
       const otherBodyRadius = getBodyRadius(other.length);
-      const killDist = (headRadius + otherBodyRadius) * 1.5;
+      const killDist = headRadius + otherBodyRadius;
       const killDistSq = killDist * killDist;
 
       for (let i = 1; i < other.segments.length; i++) {
@@ -150,6 +149,7 @@ export function checkSnakeCollisions(
         const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, killDist);
 
         if (dSq < killDistSq || sweptHit) {
+          console.log(`[KILL] ${other.name}(len=${other.segments.length}) killed ${snake.name}(len=${snake.segments.length}) dist=${Math.sqrt(dSq).toFixed(1)} killDist=${killDist.toFixed(1)}`);
           kills.push({
             killer: otherId,
             victim: id,

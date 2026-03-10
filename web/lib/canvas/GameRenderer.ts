@@ -646,6 +646,11 @@ export class GameRenderer {
         this.deathCamX = me.headX;
         this.deathCamY = me.headY;
       }
+      // Log client-server drift at moment of death
+      if (me) {
+        const drift = Math.sqrt((me.headX - me.serverHeadX) ** 2 + (me.headY - me.serverHeadY) ** 2);
+        console.log(`[CLIENT DEATH] myHead: ${me.headX.toFixed(0)},${me.headY.toFixed(0)} serverHead: ${me.serverHeadX.toFixed(0)},${me.serverHeadY.toFixed(0)} drift: ${drift.toFixed(0)}`);
+      }
       this.shakeLife = 0.3;
       // Start death animation — delay showing overlay
       this.deathAnimating = true;
@@ -1255,10 +1260,9 @@ export class GameRenderer {
     // Exponential smoothing factors — frame-rate independent
     const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
     const otherTurnLerp = 0.25; // Other players: responsive, not laggy
-    // Server position blend: pull client closer to server truth to reduce visual drift
-    const serverBlend = 1 - Math.pow(0.00001, dt); // ~0.2 per frame at 60fps
-    // Other player lerp: faster convergence
-    const otherBlend = 1 - Math.pow(0.000001, dt);
+    // Server position blend: strong pull so client stays within ~15 units of server
+    const serverBlend = 0.3;  // local player: 30% blend per frame toward server
+    const otherBlend = 0.4;   // other players: 40% blend per frame (tighter)
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
