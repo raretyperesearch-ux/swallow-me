@@ -124,23 +124,8 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // Debug logging (1% of ticks) — includes radius values to verify getBodyRadius
-  if (Math.random() < 0.01) {
-    let aliveCount = 0;
-    let totalSegs = 0;
-    const radiusInfo: string[] = [];
-    for (const [, s] of snakes) {
-      if (s.alive) {
-        aliveCount++;
-        totalSegs += s.segments.length;
-        radiusInfo.push(`${s.name}(len=${s.length},segs=${s.segments.length},r=${getBodyRadius(s.length).toFixed(1)})`);
-      }
-    }
-    console.log(`[COLLISION TICK] alive=${aliveCount} totalSegs=${totalSegs} ${radiusInfo.join(' ')}`);
-  }
-
   // HEAD vs BODY: brute force with dynamic radius matching client visuals
-  // 1.15x multiplier makes collision slightly outside visual edge so it FEELS right
+  // 1.5x multiplier accounts for client prediction drift from server positions
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
 
@@ -154,11 +139,7 @@ export function checkSnakeCollisions(
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
       const otherBodyRadius = getBodyRadius(other.length);
-      const killDist = (headRadius + otherBodyRadius) * 1.15; // generous — visual outline adds ~2px
-      if (isNaN(killDist)) {
-        console.error(`[BUG] NaN killDist! snake.length=${snake.length} other.length=${other.length}`);
-        continue;
-      }
+      const killDist = (headRadius + otherBodyRadius) * 1.5;
       const killDistSq = killDist * killDist;
 
       for (let i = 1; i < other.segments.length; i++) {
@@ -166,16 +147,9 @@ export function checkSnakeCollisions(
         const dx = headX - seg.x;
         const dy = headY - seg.y;
         const dSq = dx * dx + dy * dy;
-
-        // Log near-misses for debugging — wide radius to see if snakes ever approach
-        if (dSq < killDistSq * 16 && i === 1 && Math.random() < 0.05) {
-          console.log(`[PROXIMITY] ${snake.name} near ${other.name}: dist=${Math.sqrt(dSq).toFixed(1)} killDist=${killDist.toFixed(1)} ratio=${Math.sqrt(dSq / killDistSq).toFixed(2)}x`);
-        }
-
         const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, killDist);
 
         if (dSq < killDistSq || sweptHit) {
-          console.log(`[KILL] ${other.name} killed ${snake.name}: dist=${Math.sqrt(dSq).toFixed(1)} killDist=${killDist.toFixed(1)} swept=${sweptHit}`);
           kills.push({
             killer: otherId,
             victim: id,

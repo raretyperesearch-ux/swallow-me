@@ -1226,10 +1226,10 @@ export class GameRenderer {
     // Exponential smoothing factors — frame-rate independent
     const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
     const otherTurnLerp = 0.25; // Other players: responsive, not laggy
-    // Server position blend: converge in ~6 frames at 60fps
-    const serverBlend = 1 - Math.pow(0.001, dt);
+    // Server position blend: pull client closer to server truth to reduce visual drift
+    const serverBlend = 1 - Math.pow(0.00001, dt); // ~0.2 per frame at 60fps
     // Other player lerp: faster convergence
-    const otherBlend = 1 - Math.pow(0.0001, dt);
+    const otherBlend = 1 - Math.pow(0.000001, dt);
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
