@@ -340,7 +340,7 @@ export class GameRenderer {
   private isMobile: boolean = false;
   private isTouchDevice: boolean = false;
 
-  // Mobile joystick — floating, appears at touch point (direction ONLY)
+  // Mobile joystick — STATIC always-visible at bottom-left
   private joystickActive: boolean = false;
   private joystickCenterX: number = 0;
   private joystickCenterY: number = 0;
@@ -348,9 +348,10 @@ export class GameRenderer {
   private joystickKnobY: number = 0;
   private joystickTouchId: number | null = null;
 
-  private readonly JOYSTICK_RADIUS = 60;
-  private readonly KNOB_RADIUS = 25;
+  private readonly JOYSTICK_RADIUS = 70;
+  private readonly KNOB_RADIUS = 28;
   private readonly DEAD_ZONE = 8;
+  private readonly JOYSTICK_HITBOX = 150;
 
   // Boost button (bottom-right, mobile)
   private boostTouchId: number | null = null;
@@ -775,35 +776,28 @@ export class GameRenderer {
           const touch = e.changedTouches[i];
           const tx = touch.clientX;
           const ty = touch.clientY;
+          const halfW = this.cssW * 0.5;
 
-          // Check boost button first — hitbox is radius + 15px for easier tapping
-          const btn = this.getBoostButtonCenter();
-          const bdx = tx - btn.x;
-          const bdy = ty - btn.y;
-          const bDist = Math.sqrt(bdx * bdx + bdy * bdy);
-          const hitRadius = btn.radius + 15;
-
-          if (bDist < hitRadius && this.boostTouchId === null) {
+          // Right half of screen = boost zone
+          if (tx >= halfW && this.boostTouchId === null) {
             this.boostTouchId = touch.identifier;
             this.touchBoosting = true;
             continue;
           }
 
-          // Also catch zone-based: bottom-right quadrant = boost
-          if (tx > this.cssW * 0.7 && ty > this.cssH * 0.7 && this.boostTouchId === null) {
-            this.boostTouchId = touch.identifier;
-            this.touchBoosting = true;
-            continue;
-          }
-
-          // Everything else = joystick (direction only)
-          if (this.joystickTouchId === null) {
-            this.joystickCenterX = tx;
-            this.joystickCenterY = ty;
-            this.joystickKnobX = tx;
-            this.joystickKnobY = ty;
-            this.joystickTouchId = touch.identifier;
-            this.joystickActive = true;
+          // Left half of screen = joystick zone
+          if (tx < halfW && this.joystickTouchId === null) {
+            // Check if touch is within hitbox of the static joystick center
+            const jcx = 90;
+            const jcy = this.cssH - 90;
+            const jdx = tx - jcx;
+            const jdy = ty - jcy;
+            const jDist = Math.sqrt(jdx * jdx + jdy * jdy);
+            if (jDist < this.JOYSTICK_HITBOX) {
+              this.joystickTouchId = touch.identifier;
+              this.joystickActive = true;
+              this.handleJoystickMove(tx, ty);
+            }
           }
         }
       }, { passive: false });
@@ -827,6 +821,9 @@ export class GameRenderer {
           if (tid === this.joystickTouchId) {
             this.joystickActive = false;
             this.joystickTouchId = null;
+            // Snap knob back to center
+            this.joystickKnobX = 90;
+            this.joystickKnobY = this.cssH - 90;
           }
           if (tid === this.boostTouchId) {
             this.boostTouchId = null;
@@ -840,6 +837,8 @@ export class GameRenderer {
         e.stopPropagation();
         this.joystickActive = false;
         this.joystickTouchId = null;
+        this.joystickKnobX = 90;
+        this.joystickKnobY = this.cssH - 90;
         this.boostTouchId = null;
         this.touchBoosting = false;
       }, { passive: false });
@@ -849,17 +848,27 @@ export class GameRenderer {
   // ─── Joystick Logic (no separate canvas) ──────────
 
   private handleJoystickMove(touchX: number, touchY: number) {
-    const dx = touchX - this.joystickCenterX;
-    const dy = touchY - this.joystickCenterY;
+    // Static joystick center — always bottom-left
+    const cx = 90;
+    const cy = this.cssH - 90;
+    this.joystickCenterX = cx;
+    this.joystickCenterY = cy;
+
+    const dx = touchX - cx;
+    const dy = touchY - cy;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     // Dead zone — ignore tiny movements
-    if (dist < this.DEAD_ZONE) return;
+    if (dist < this.DEAD_ZONE) {
+      this.joystickKnobX = cx;
+      this.joystickKnobY = cy;
+      return;
+    }
 
     // Clamp knob to joystick radius
     if (dist > this.JOYSTICK_RADIUS) {
-      this.joystickKnobX = this.joystickCenterX + (dx / dist) * this.JOYSTICK_RADIUS;
-      this.joystickKnobY = this.joystickCenterY + (dy / dist) * this.JOYSTICK_RADIUS;
+      this.joystickKnobX = cx + (dx / dist) * this.JOYSTICK_RADIUS;
+      this.joystickKnobY = cy + (dy / dist) * this.JOYSTICK_RADIUS;
     } else {
       this.joystickKnobX = touchX;
       this.joystickKnobY = touchY;
@@ -871,23 +880,30 @@ export class GameRenderer {
     // Joystick is direction ONLY — no boost from joystick
   }
 
-  // Draw joystick on MAIN canvas in SCREEN coordinates (after all game rendering)
+  // Draw joystick on MAIN canvas — ALWAYS visible at bottom-left
   private drawJoystick(ctx: CanvasRenderingContext2D) {
-    if (!this.joystickActive) return;
+    // Static position — always bottom-left
+    const cx = 90;
+    const cy = this.cssH - 90;
 
-    // Outer ring
+    // Outer ring — filled + stroked
     ctx.beginPath();
-    ctx.arc(this.joystickCenterX, this.joystickCenterY, this.JOYSTICK_RADIUS, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    ctx.arc(cx, cy, this.JOYSTICK_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
     ctx.lineWidth = 3;
     ctx.stroke();
 
-    // Inner knob — always white, no boost coloring
+    // Inner knob — snaps back to center when not active
+    const knobX = this.joystickActive ? this.joystickKnobX : cx;
+    const knobY = this.joystickActive ? this.joystickKnobY : cy;
+
     ctx.beginPath();
-    ctx.arc(this.joystickKnobX, this.joystickKnobY, this.KNOB_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.arc(knobX, knobY, this.KNOB_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = this.joystickActive ? "rgba(255, 255, 255, 0.5)" : "rgba(255, 255, 255, 0.4)";
     ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
     ctx.lineWidth = 2;
     ctx.stroke();
   }
@@ -895,11 +911,10 @@ export class GameRenderer {
   // ─── Boost Button (bottom-right, mobile) ──────────
 
   private getBoostButtonCenter(): { x: number; y: number; radius: number } {
-    const isLandscape = this.cssW > this.cssH;
-    const r = isLandscape ? 30 : 35;
+    const r = 40;
     return {
-      x: this.cssW - r - 20,
-      y: this.cssH - r - 35,
+      x: this.cssW - 60,
+      y: this.cssH - 90,
       radius: r,
     };
   }
@@ -914,21 +929,21 @@ export class GameRenderer {
     // Energy arc around the outside
     this.drawBoostEnergyArc(ctx, x, y, radius + 5);
 
-    // Main circle
+    // Main circle — brighter default state
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     if (this.touchBoosting && canBoost) {
-      ctx.fillStyle = "rgba(0, 255, 100, 0.2)";
-      ctx.strokeStyle = "rgba(0, 255, 100, 0.8)";
+      ctx.fillStyle = "rgba(0, 255, 100, 0.3)";
+      ctx.strokeStyle = "rgba(0, 255, 100, 0.9)";
     } else if (!canBoost) {
       ctx.fillStyle = "rgba(255, 50, 50, 0.1)";
       ctx.strokeStyle = "rgba(255, 50, 50, 0.4)";
     } else {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+      ctx.fillStyle = "rgba(0, 255, 100, 0.12)";
+      ctx.strokeStyle = "rgba(0, 255, 100, 0.5)";
     }
     ctx.fill();
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     // Lightning bolt emoji
