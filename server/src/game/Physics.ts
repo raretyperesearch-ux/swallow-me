@@ -59,14 +59,14 @@ function lineCircleIntersect(
   return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1) || (t1 < 0 && t2 > 1);
 }
 
-// Reusable spatial grids — cell size 50 for tighter broad phase
-const bodyGrid = new SpatialGrid(50);
+// Spatial grid for food only — snake collision is brute force (airtight)
 const foodGrid = new SpatialGrid(50);
 
 /**
  * Check all head-to-body collisions between snakes.
- * Uses spatial grid for broad phase, then precise per-segment check.
- * Collision threshold is tight (1.1x) — matches visual body radius on screen.
+ * BRUTE FORCE — no spatial grid. Check every head against every other snake's
+ * body segments directly. For 10-20 snakes this is fast enough and CANNOT miss.
+ * Real money depends on this being airtight.
  */
 export function checkSnakeCollisions(
   snakes: Map<string, ServerSnake>
@@ -74,20 +74,11 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // BROAD PHASE: Build spatial grid of all body segments (skip segment 0 = head position only)
-  bodyGrid.clear();
-  for (const [id, snake] of snakes) {
-    if (!snake.alive) continue;
-    for (let i = 1; i < snake.segments.length; i += 1) {
-      bodyGrid.insert(id, snake.segments[i].x, snake.segments[i].y);
-    }
-  }
+  // Kill distance: BODY_RADIUS * 3 = 42 units — very generous, impossible to phase through
+  const KILL_DIST = GAME_CONFIG.BODY_RADIUS * 3;
+  const KILL_DIST_SQ = KILL_DIST * KILL_DIST;
 
-  // NARROW PHASE: Swept line-circle test from prevHead to head against body segments
-  // 1.3x multiplier — slightly generous, but for real money missed kills are worse than false kills
-  const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.3;
-  const collisionDistSq = collisionDist * collisionDist;
-
+  // HEAD vs BODY: brute force every snake head against every other snake's segments
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
 
@@ -96,32 +87,22 @@ export function checkSnakeCollisions(
     const prevX = snake.prevHeadX;
     const prevY = snake.prevHeadY;
 
-    // Query spatial grid at BOTH previous and current head positions
-    // to catch cases where the head crosses a cell boundary during movement
-    const nearbyIds1 = bodyGrid.getNearby(prevX, prevY);
-    const nearbyIds2 = bodyGrid.getNearby(headX, headY);
-    const nearbyIds = new Set([...nearbyIds1, ...nearbyIds2]);
+    for (const [otherId, other] of snakes) {
+      if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
-    // For boosting snakes (16 units/tick), also check the midpoint
-    if (snake.boosting) {
-      const midX = (prevX + headX) / 2;
-      const midY = (prevY + headY) / 2;
-      const nearbyIdsMid = bodyGrid.getNearby(midX, midY);
-      for (const mid of nearbyIdsMid) nearbyIds.add(mid);
-    }
-
-    for (const otherId of nearbyIds) {
-      if (otherId === id || alreadyDead.has(otherId)) continue;
-      const other = snakes.get(otherId);
-      if (!other || !other.alive) continue;
-
-      // Belt-and-suspenders: swept line-circle OR point-distance check
+      // Check head against EVERY body segment — no spatial grid, no skipping
       for (let i = 1; i < other.segments.length; i++) {
         const seg = other.segments[i];
-        const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, collisionDist);
-        const pointHit = distanceSq(headX, headY, seg.x, seg.y) < collisionDistSq;
 
-        if (sweptHit || pointHit) {
+        // Point-distance check (current head position)
+        const dx = headX - seg.x;
+        const dy = headY - seg.y;
+        const dSq = dx * dx + dy * dy;
+
+        // Swept line-circle check (prevHead → head path)
+        const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, KILL_DIST);
+
+        if (dSq < KILL_DIST_SQ || sweptHit) {
           kills.push({
             killer: otherId,
             victim: id,
@@ -139,22 +120,20 @@ export function checkSnakeCollisions(
     }
   }
 
-  // Head-to-head: both die (swept — check if movement paths intersect)
-  const heads = Array.from(snakes.entries()).filter(
-    ([id, s]) => s.alive && !alreadyDead.has(id)
-  );
-  for (let i = 0; i < heads.length; i++) {
-    for (let j = i + 1; j < heads.length; j++) {
-      const [idA, a] = heads[i];
-      const [idB, b] = heads[j];
-      if (alreadyDead.has(idA) || alreadyDead.has(idB)) continue;
+  // HEAD vs HEAD: both die
+  for (const [idA, a] of snakes) {
+    if (!a.alive || alreadyDead.has(idA)) continue;
+
+    for (const [idB, b] of snakes) {
+      if (idB <= idA || !b.alive || alreadyDead.has(idB)) continue;
 
       const headCollDist = GAME_CONFIG.HEAD_RADIUS * 2;
-      // Check swept path of both heads against each other's current position
-      const hitCurrent = distanceSq(a.headX, a.headY, b.headX, b.headY) < headCollDist * headCollDist;
+      const headCollDistSq = headCollDist * headCollDist;
+      const hitPoint = distanceSq(a.headX, a.headY, b.headX, b.headY) < headCollDistSq;
       const hitSweptA = lineCircleIntersect(a.prevHeadX, a.prevHeadY, a.headX, a.headY, b.headX, b.headY, headCollDist);
       const hitSweptB = lineCircleIntersect(b.prevHeadX, b.prevHeadY, b.headX, b.headY, a.headX, a.headY, headCollDist);
-      if (hitCurrent || hitSweptA || hitSweptB) {
+
+      if (hitPoint || hitSweptA || hitSweptB) {
         kills.push({
           killer: null,
           victim: idA,
