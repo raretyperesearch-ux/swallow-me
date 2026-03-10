@@ -259,8 +259,8 @@ export class GameRenderer {
   // Camera (with zoom)
   private camX: number = 0;
   private camY: number = 0;
-  private zoom: number = 1;
-  private targetZoom: number = 1;
+  private zoom: number = 0.6;
+  private targetZoom: number = 0.6;
 
   // Local state
   private localSnakes: Map<string, LocalSnake> = new Map();
@@ -1302,7 +1302,7 @@ export class GameRenderer {
 
       // Zoom out as snake grows: length 40→1.0, length 200→0.7, length 500→0.5
       const len = me.serverLength || 40;
-      this.targetZoom = Math.max(0.5, Math.min(1.0, 1.0 - (len - 40) / 900));
+      this.targetZoom = Math.max(0.3, Math.min(0.6, 0.6 - (len - 40) / 500));
       this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
 
       // Trail: spawn every frame, bigger on mobile
