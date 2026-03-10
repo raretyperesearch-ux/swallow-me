@@ -30,7 +30,7 @@ const foodGrid = new SpatialGrid(300);
 /**
  * Check all head-to-body collisions between snakes.
  * Uses spatial grid for broad phase, then precise per-segment check.
- * Collision threshold is generous (1.8x) — better to kill too easily than not at all.
+ * Collision threshold is tight (1.1x) — matches visual body radius on screen.
  */
 export function checkSnakeCollisions(
   snakes: Map<string, ServerSnake>
@@ -38,17 +38,17 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // BROAD PHASE: Build spatial grid of all body segments (skip head area, stride 2 for density)
+  // BROAD PHASE: Build spatial grid of all body segments (skip head area, stride 1 for consistency)
   bodyGrid.clear();
   for (const [id, snake] of snakes) {
     if (!snake.alive) continue;
-    for (let i = 3; i < snake.segments.length; i += 2) {
+    for (let i = 3; i < snake.segments.length; i += 1) {
       bodyGrid.insert(id, snake.segments[i].x, snake.segments[i].y);
     }
   }
 
   // NARROW PHASE: For each snake's head, check against nearby snakes' body segments
-  const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.8;
+  const collisionDist = (GAME_CONFIG.HEAD_RADIUS + GAME_CONFIG.BODY_RADIUS) * 1.1;
   const collisionDistSq = collisionDist * collisionDist;
 
   for (const [id, snake] of snakes) {
@@ -71,8 +71,6 @@ export function checkSnakeCollisions(
         const dSq = distanceSq(headX, headY, seg.x, seg.y);
 
         if (dSq < collisionDistSq) {
-          const dist = Math.sqrt(dSq);
-          console.log(`[KILL] ${other.name} killed ${snake.name} at distance ${dist.toFixed(1)} (threshold ${collisionDist.toFixed(1)}, seg ${i}/${other.segments.length})`);
           kills.push({
             killer: otherId,
             victim: id,
@@ -103,7 +101,6 @@ export function checkSnakeCollisions(
       const headCollDist = GAME_CONFIG.HEAD_RADIUS * 2;
       const dSq = distanceSq(a.headX, a.headY, b.headX, b.headY);
       if (dSq < headCollDist * headCollDist) {
-        console.log(`[KILL] Head-to-head: ${a.name} vs ${b.name}`);
         kills.push({
           killer: null,
           victim: idA,

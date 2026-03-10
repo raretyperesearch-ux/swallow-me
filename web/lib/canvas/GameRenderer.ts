@@ -1401,7 +1401,7 @@ export class GameRenderer {
   // ─── Hexagon Background Pattern ─────────────────
 
   private initHexPattern() {
-    const hexR = 40; // hexagon radius
+    const hexR = 30; // hexagon radius
     const sqrt3 = Math.sqrt(3);
     // Unit cell for honeycomb tiling
     const tileW = sqrt3 * hexR;
@@ -1415,12 +1415,12 @@ export class GameRenderer {
     const tctx = tile.getContext("2d")!;
 
     // Fill with base background
-    tctx.fillStyle = "#0a0a1a";
+    tctx.fillStyle = "#050508";
     tctx.fillRect(0, 0, tile.width, tile.height);
 
-    tctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    tctx.strokeStyle = "rgba(255, 255, 255, 0.03)";
     tctx.lineWidth = 1;
-    tctx.fillStyle = "#0d0d1a";
+    tctx.fillStyle = "#0a0a0f";
 
     // Draw hexagon helper
     const drawHex = (cx: number, cy: number) => {
