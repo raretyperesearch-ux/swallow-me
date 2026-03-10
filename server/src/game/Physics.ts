@@ -24,8 +24,8 @@ function distanceSq(x1: number, y1: number, x2: number, y2: number): number {
 }
 
 // Reusable spatial grids
-const bodyGrid = new SpatialGrid(300);
-const foodGrid = new SpatialGrid(300);
+const bodyGrid = new SpatialGrid(100);
+const foodGrid = new SpatialGrid(100);
 
 /**
  * Check all head-to-body collisions between snakes.
