@@ -265,7 +265,10 @@ export class GameRenderer {
   // Local state
   private localSnakes: Map<string, LocalSnake> = new Map();
   private arenaRadius: number = 5000;
-  private bgPattern: CanvasPattern | null = null;
+  private bgPattern: CanvasPattern | null = null; // unused legacy
+  private hexPattern: CanvasPattern | null = null;
+  private hexTileW: number = 0;
+  private hexTileH: number = 0;
 
   // Assets
   private bgImage: HTMLImageElement | null = null;
@@ -419,12 +422,12 @@ export class GameRenderer {
       this.foodGlowLarge.push(createGlowCircle(glowRadiusLarge, color));
     }
 
+    // Pre-render hex tile pattern for background
+    this.initHexPattern();
+
     this.preloadAssets().then(() => {
       this.assetsLoaded = true;
       this.ready = true;
-      if (this.bgImage) {
-        this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
-      }
       this.setupListeners();
     });
 
@@ -446,9 +449,8 @@ export class GameRenderer {
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.imageSmoothingQuality = this.isMobile ? "medium" : "high";
-    if (this.bgImage && this.bgImage.complete) {
-      this.bgPattern = this.ctx.createPattern(this.bgImage, "repeat");
-    }
+    // Re-create hex pattern after context reset
+    this.initHexPattern();
   }
 
   // ─── Asset Preloading ─────────────────────────────
@@ -1360,12 +1362,8 @@ export class GameRenderer {
 
     ctx.clearRect(0, 0, W, H);
 
-    // Dark background
-    ctx.fillStyle = "#0a0a1a";
-    ctx.fillRect(0, 0, W, H);
-
-    // Scrolling grid background (zoom-aware)
-    this.drawGrid(ctx, W, H);
+    // Hex background (pre-rendered pattern, scrolls with camera)
+    this.drawHexBackground(ctx, W, H);
 
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
@@ -1400,36 +1398,64 @@ export class GameRenderer {
     this.drawMinimap(ctx, W, H);
   }
 
-  // ─── Scrolling Grid Background ────────────────────
+  // ─── Hexagon Background Pattern ─────────────────
 
-  private drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    const gridSize = 80;
-    ctx.strokeStyle = this.isMobile ? "rgba(255, 255, 255, 0.07)" : "rgba(255, 255, 255, 0.04)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
+  private initHexPattern() {
+    const hexR = 40; // hexagon radius
+    const sqrt3 = Math.sqrt(3);
+    // Unit cell for honeycomb tiling
+    const tileW = sqrt3 * hexR;
+    const tileH = hexR * 3;
+    this.hexTileW = tileW;
+    this.hexTileH = tileH;
 
-    // Calculate visible world bounds
-    const halfW = (W / 2) / this.zoom;
-    const halfH = (H / 2) / this.zoom;
-    const worldLeft = this.camX - halfW;
-    const worldRight = this.camX + halfW;
-    const worldTop = this.camY - halfH;
-    const worldBottom = this.camY + halfH;
+    const tile = document.createElement("canvas");
+    tile.width = Math.ceil(tileW);
+    tile.height = Math.ceil(tileH);
+    const tctx = tile.getContext("2d")!;
 
-    const startX = Math.floor(worldLeft / gridSize) * gridSize;
-    const startY = Math.floor(worldTop / gridSize) * gridSize;
+    // Fill with base background
+    tctx.fillStyle = "#0a0a1a";
+    tctx.fillRect(0, 0, tile.width, tile.height);
 
-    for (let wx = startX; wx <= worldRight; wx += gridSize) {
-      const sx = this.toScreenX(wx);
-      ctx.moveTo(sx, 0);
-      ctx.lineTo(sx, H);
-    }
-    for (let wy = startY; wy <= worldBottom; wy += gridSize) {
-      const sy = this.toScreenY(wy);
-      ctx.moveTo(0, sy);
-      ctx.lineTo(W, sy);
-    }
-    ctx.stroke();
+    tctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    tctx.lineWidth = 1;
+    tctx.fillStyle = "#0d0d1a";
+
+    // Draw hexagon helper
+    const drawHex = (cx: number, cy: number) => {
+      tctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i - Math.PI / 6; // flat-top
+        const hx = cx + hexR * Math.cos(angle);
+        const hy = cy + hexR * Math.sin(angle);
+        if (i === 0) tctx.moveTo(hx, hy);
+        else tctx.lineTo(hx, hy);
+      }
+      tctx.closePath();
+      tctx.fill();
+      tctx.stroke();
+    };
+
+    // Two hexagons per unit cell for honeycomb tiling
+    // Hex 1: top-left
+    drawHex(0, hexR);
+    // Hex 2: offset center-right (honeycomb offset)
+    drawHex(tileW / 2, hexR * 2.5);
+
+    this.hexPattern = this.ctx.createPattern(tile, "repeat");
+  }
+
+  private drawHexBackground(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (!this.hexPattern) return;
+    ctx.save();
+    // Scroll pattern with camera (world-space scrolling)
+    const ox = (-this.camX * this.zoom) % this.hexTileW;
+    const oy = (-this.camY * this.zoom) % this.hexTileH;
+    ctx.translate(ox, oy);
+    ctx.fillStyle = this.hexPattern;
+    ctx.fillRect(-this.hexTileW, -this.hexTileH, W + this.hexTileW * 2, H + this.hexTileH * 2);
+    ctx.restore();
   }
 
   // ─── Coordinate helpers (zoom-aware) ──────────────
