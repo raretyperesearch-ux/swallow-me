@@ -307,7 +307,6 @@ export class GameRenderer {
   // Boost particles (pre-allocated pool)
   private boostPool: PooledParticle[] = createParticlePool(200);
   private boostFrameCounter: number = 0;
-  private syncFrameCounter: number = 0;
 
   // Trail particles (pre-allocated pool, additive blending)
   private trailPool: PooledParticle[] = createParticlePool(100);
@@ -628,24 +627,6 @@ export class GameRenderer {
         }
         // Auto-clear from tracking set after 2 seconds (state sync will have caught up)
         setTimeout(() => this.eatenFoodIds.delete(id), 2000);
-      }
-    });
-
-    // Snap killer/victim positions to server truth when a kill happens
-    this.room.onMessage("kill-visual", (data: { killerSessionId: string; victimSessionId: string; killerX: number; killerY: number; victimX: number; victimY: number }) => {
-      const killer = this.localSnakes.get(data.killerSessionId);
-      if (killer) {
-        killer.headX = data.killerX;
-        killer.headY = data.killerY;
-        killer.serverHeadX = data.killerX;
-        killer.serverHeadY = data.killerY;
-      }
-      const victim = this.localSnakes.get(data.victimSessionId);
-      if (victim) {
-        victim.headX = data.victimX;
-        victim.headY = data.victimY;
-        victim.serverHeadX = data.victimX;
-        victim.serverHeadY = data.victimY;
       }
     });
 
@@ -1275,17 +1256,6 @@ export class GameRenderer {
     // dt = seconds since last frame (capped in loop)
 
     this.boostFrameCounter++;
-    this.syncFrameCounter++;
-
-    // Every ~2 seconds, hard-correct all positions to prevent cumulative drift
-    if (this.syncFrameCounter % 120 === 0) {
-      for (const [, snake] of this.localSnakes) {
-        if (!snake.alive) continue;
-        snake.headX = snake.serverHeadX;
-        snake.headY = snake.serverHeadY;
-        snake.angle = snake.serverAngle;
-      }
-    }
 
     // Exponential smoothing factors — frame-rate independent
     const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
@@ -1364,9 +1334,8 @@ export class GameRenderer {
       }
 
       const snakeBodyRadius = 6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3;
-      const spacing = Math.max(3, snakeBodyRadius * 0.5);
-      const stride = snake.segments.length > 200 ? 2 : 1;
-      for (let i = 1; i < snake.segments.length; i += stride) {
+      const spacing = Math.max(3, snakeBodyRadius * 0.7);
+      for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
         const dx = curr.x - prev.x;

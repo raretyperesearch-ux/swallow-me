@@ -40,17 +40,12 @@ export function runGameTick(
     const prevLength = snake.length;
     updateSnake(snake);
 
-    // If boosting caused length loss, drop food behind tail (every 3rd tick)
+    // If boosting caused length loss, drop food behind tail
     if (wasBoosting && snake.length < prevLength) {
-      snake.boostTickCounter++;
-      if (snake.boostTickCounter % 3 === 0) {
-        const tail = snake.segments[snake.segments.length - 1];
-        if (tail) {
-          callbacks.onBoostFoodDrop(tail.x, tail.y);
-        }
+      const tail = snake.segments[snake.segments.length - 1];
+      if (tail) {
+        callbacks.onBoostFoodDrop(tail.x, tail.y);
       }
-    } else {
-      snake.boostTickCounter = 0;
     }
   }
 

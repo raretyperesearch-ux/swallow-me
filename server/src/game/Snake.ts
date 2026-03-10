@@ -26,7 +26,6 @@ export interface ServerSnake {
   skinId: number;
   lastInputTime: number;
   spawnTime: number;
-  boostTickCounter: number;
 }
 
 export function createSnake(
@@ -71,7 +70,6 @@ export function createSnake(
     skinId,
     lastInputTime: Date.now(),
     spawnTime: Date.now(),
-    boostTickCounter: 0,
   };
 }
 
