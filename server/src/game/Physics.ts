@@ -24,6 +24,15 @@ function distanceSq(x1: number, y1: number, x2: number, y2: number): number {
 }
 
 /**
+ * Dynamic body radius — matches the client visual formula exactly.
+ * Client: bodyRadius = (8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5) * zoom
+ * Server: same formula without zoom (zoom is camera-only, not world-space).
+ */
+function getBodyRadius(length: number): number {
+  return 8 + Math.log2(Math.max(40, length)) * 2.5;
+}
+
+/**
  * Swept line-circle intersection test.
  * Returns true if line segment (px,py)->(qx,qy) passes within `radius` of circle at (cx,cy).
  * Uses quadratic formula on the parametric ray equation — handles all edge cases.
@@ -74,11 +83,7 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // Kill distance: BODY_RADIUS * 3 = 42 units — very generous, impossible to phase through
-  const KILL_DIST = GAME_CONFIG.BODY_RADIUS * 3;
-  const KILL_DIST_SQ = KILL_DIST * KILL_DIST;
-
-  // HEAD vs BODY: brute force every snake head against every other snake's segments
+  // HEAD vs BODY: brute force with dynamic radius matching client visuals
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
 
@@ -86,23 +91,23 @@ export function checkSnakeCollisions(
     const headY = snake.headY;
     const prevX = snake.prevHeadX;
     const prevY = snake.prevHeadY;
+    const headRadius = getBodyRadius(snake.length);
 
     for (const [otherId, other] of snakes) {
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
-      // Check head against EVERY body segment — no spatial grid, no skipping
+      const otherBodyRadius = getBodyRadius(other.length);
+      const killDist = headRadius + otherBodyRadius; // head touches body = death
+      const killDistSq = killDist * killDist;
+
       for (let i = 1; i < other.segments.length; i++) {
         const seg = other.segments[i];
-
-        // Point-distance check (current head position)
         const dx = headX - seg.x;
         const dy = headY - seg.y;
         const dSq = dx * dx + dy * dy;
+        const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, killDist);
 
-        // Swept line-circle check (prevHead → head path)
-        const sweptHit = lineCircleIntersect(prevX, prevY, headX, headY, seg.x, seg.y, KILL_DIST);
-
-        if (dSq < KILL_DIST_SQ || sweptHit) {
+        if (dSq < killDistSq || sweptHit) {
           kills.push({
             killer: otherId,
             victim: id,
@@ -120,14 +125,14 @@ export function checkSnakeCollisions(
     }
   }
 
-  // HEAD vs HEAD: both die
+  // HEAD vs HEAD: both die — dynamic radius per snake
   for (const [idA, a] of snakes) {
     if (!a.alive || alreadyDead.has(idA)) continue;
 
     for (const [idB, b] of snakes) {
       if (idB <= idA || !b.alive || alreadyDead.has(idB)) continue;
 
-      const headCollDist = GAME_CONFIG.HEAD_RADIUS * 2;
+      const headCollDist = getBodyRadius(a.length) + getBodyRadius(b.length);
       const headCollDistSq = headCollDist * headCollDist;
       const hitPoint = distanceSq(a.headX, a.headY, b.headX, b.headY) < headCollDistSq;
       const hitSweptA = lineCircleIntersect(a.prevHeadX, a.prevHeadY, a.headX, a.headY, b.headX, b.headY, headCollDist);
@@ -175,7 +180,7 @@ export function checkBoundaryCollisions(
       snake.headX * snake.headX + snake.headY * snake.headY
     );
 
-    if (distFromCenter >= arenaRadius) {
+    if (distFromCenter + getBodyRadius(snake.length) >= arenaRadius) {
       kills.push({
         killer: null,
         victim: id,
