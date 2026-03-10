@@ -409,7 +409,7 @@ export class GameRenderer {
   private killAnnouncementTimer: number = 0;
 
   // Leaderboard cache (updated every 500ms)
-  private leaderboardCache: { name: string; length: number; isMe: boolean }[] = [];
+  private leaderboardCache: { name: string; valueUsdc: number; isMe: boolean }[] = [];
   private lastLeaderboardUpdate: number = 0;
 
   // Callbacks
@@ -562,7 +562,16 @@ export class GameRenderer {
     this.room.state.snakes.onRemove((_: any, key: string) => {
       const snake = this.localSnakes.get(key);
       if (snake && snake.alive && this.isInView(snake.headX, snake.headY, 200)) {
-        this.spawnDeathParticles(snake.headX, snake.headY, snake.skinId, key === this.mySessionId);
+        // Full-body death explosion along all segments
+        const color = SKIN_PATTERNS[snake.skinId % SKIN_PATTERNS.length].primary;
+        const step = Math.max(1, Math.floor(snake.segments.length / 300));
+        for (let i = 0; i < snake.segments.length; i += step) {
+          const seg = snake.segments[i];
+          this.emitPool(this.deathPool, seg.x, seg.y, 2, color, 3, 1.5, 4, 10);
+        }
+        if (key === this.mySessionId) {
+          this.shakeLife = 0.2;
+        }
       }
       this.localSnakes.delete(key);
     });
@@ -1903,26 +1912,26 @@ export class GameRenderer {
   // ─── Leaderboard ────────────────────────────────────
 
   private updateLeaderboard() {
-    const entries: { name: string; length: number; isMe: boolean }[] = [];
+    const entries: { name: string; valueUsdc: number; isMe: boolean }[] = [];
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
-      entries.push({ name: snake.name, length: snake.serverLength, isMe: id === this.mySessionId });
+      entries.push({ name: snake.name, valueUsdc: snake.valueUsdc, isMe: id === this.mySessionId });
     }
-    entries.sort((a, b) => b.length - a.length);
+    entries.sort((a, b) => b.valueUsdc - a.valueUsdc);
     this.leaderboardCache = entries.slice(0, 5);
   }
 
   private drawLeaderboard(ctx: CanvasRenderingContext2D, W: number, H: number) {
     if (this.leaderboardCache.length === 0) return;
 
-    const fontSize = this.isMobile ? 10 : 13;
-    const lineH = this.isMobile ? 18 : 24;
+    const fontSize = this.isMobile ? 9 : 13;
+    const lineH = this.isMobile ? 16 : 24;
     const padding = this.isMobile ? 6 : 10;
-    const panelW = this.isMobile ? 110 : 160;
+    const panelW = this.isMobile ? 120 : 170;
     const headerH = lineH + 2;
     const panelH = headerH + this.leaderboardCache.length * lineH + padding;
-    const px = padding;
-    const py = this.isMobile ? 50 : 70;
+    const px = 12;
+    const py = this.isMobile ? 80 : 100;
 
     // Panel background
     ctx.globalAlpha = 0.6;
@@ -1944,24 +1953,26 @@ export class GameRenderer {
       const entry = this.leaderboardCache[i];
       const ey = py + headerH + i * lineH + fontSize;
 
-      // Rank
+      // Rank + Name
       ctx.fillStyle = entry.isMe ? "#00FF66" : "#cccccc";
       const rank = `${i + 1}. `;
       ctx.fillText(rank, px + padding, ey);
       const rankW = ctx.measureText(rank).width;
 
       // Name (truncated)
-      const maxNameW = panelW - padding * 2 - rankW - 30;
+      const valueStr = `$${(entry.valueUsdc / 1_000_000).toFixed(2)}`;
+      const valueW = ctx.measureText(valueStr).width;
+      const maxNameW = panelW - padding * 2 - rankW - valueW - 6;
       let name = entry.name;
       while (ctx.measureText(name).width > maxNameW && name.length > 3) {
         name = name.slice(0, -1);
       }
       ctx.fillText(name, px + padding + rankW, ey);
 
-      // Length
+      // USDC value
       ctx.textAlign = "right";
-      ctx.fillStyle = entry.isMe ? "#00FF66" : "#999999";
-      ctx.fillText(`${entry.length}`, px + panelW - padding, ey);
+      ctx.fillStyle = entry.isMe ? "#00FF66" : "#22CC66";
+      ctx.fillText(valueStr, px + panelW - padding, ey);
       ctx.textAlign = "left";
     }
   }

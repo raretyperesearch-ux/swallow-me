@@ -5,6 +5,7 @@ import {
   checkSnakeCollisions,
   checkBoundaryCollisions,
   checkFoodCollisions,
+  checkContainmentKills,
   KillEvent,
   FoodEatEvent,
 } from "./Physics";
@@ -48,10 +49,13 @@ export function runGameTick(
     }
   }
 
-  // 3. Check collisions (uses spatial grid internally)
-  const snakeKills = checkSnakeCollisions(snakes);
+  // 3. Check collisions — run TWICE to catch edge cases where first pass
+  //    marks a snake dead that was blocking detection of another collision
+  const snakeKills1 = checkSnakeCollisions(snakes);
+  const containmentKills = checkContainmentKills(snakes);
+  const snakeKills2 = checkSnakeCollisions(snakes); // second pass catches stragglers
   const boundaryKills = checkBoundaryCollisions(snakes, arenaRadius);
-  const allKills = [...snakeKills, ...boundaryKills];
+  const allKills = [...snakeKills1, ...containmentKills, ...snakeKills2, ...boundaryKills];
 
   // 4. Process kills
   for (const kill of allKills) {
@@ -59,10 +63,9 @@ export function runGameTick(
     if (victim && victim.alive) {
       victim.alive = false;
 
-      // Drop death food at victim location
+      // Drop death food along the victim's body shape
       const deathFoods = spawnDeathFood(
-        victim.headX,
-        victim.headY,
+        victim.segments,
         GAME_CONFIG.DEATH_FOOD_COUNT
       );
       for (const f of deathFoods) {

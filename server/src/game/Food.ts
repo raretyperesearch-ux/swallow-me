@@ -23,21 +23,26 @@ export function spawnRandomFood(arenaRadius: number): ServerFood {
   );
 }
 
+/**
+ * Spawn death food distributed along a snake's body segments.
+ * Each orb spawns at a segment position + small random offset,
+ * tracing the ghost of the dead snake's shape.
+ */
 export function spawnDeathFood(
-  x: number,
-  y: number,
-  count: number
+  segments: { x: number; y: number }[],
+  maxCount: number
 ): ServerFood[] {
   const foods: ServerFood[] = [];
-  for (let i = 0; i < count; i++) {
-    const spreadAngle = Math.random() * Math.PI * 2;
-    const spreadDist = Math.random() * 80 + 20;
+  // Cap at 40 for very long snakes to avoid flooding
+  const count = Math.min(maxCount, 40);
+  const stride = Math.max(1, Math.floor(segments.length / count));
+
+  for (let i = 0; i < segments.length && foods.length < count; i += stride) {
+    const seg = segments[i];
+    const offsetX = (Math.random() - 0.5) * 20; // ±10 units
+    const offsetY = (Math.random() - 0.5) * 20;
     foods.push(
-      createFood(
-        x + Math.cos(spreadAngle) * spreadDist,
-        y + Math.sin(spreadAngle) * spreadDist,
-        2 // Larger death food
-      )
+      createFood(seg.x + offsetX, seg.y + offsetY, 2)
     );
   }
   return foods;

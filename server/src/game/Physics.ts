@@ -67,6 +67,48 @@ function lineCircleIntersect(
   return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1) || (t1 < 0 && t2 > 1);
 }
 
+/**
+ * Ray-casting containment test: is point (px,py) inside the polygon
+ * formed by a snake's body segments? Uses crossing-number algorithm.
+ * A ray cast in +X from the point; count how many segment edges it crosses.
+ * Odd crossings = inside.
+ */
+function isPointInsideSnakeLoop(
+  px: number, py: number,
+  segments: { x: number; y: number }[],
+  minSegments: number = 30
+): boolean {
+  const n = segments.length;
+  if (n < minSegments) return false; // too short to form a loop
+
+  // Check if the snake's body forms a near-closed loop:
+  // head and tail must be within a reasonable distance
+  const head = segments[0];
+  const tail = segments[n - 1];
+  const closeDist = 80; // segments must be this close to form a "loop"
+  const dx = head.x - tail.x;
+  const dy = head.y - tail.y;
+  if (dx * dx + dy * dy > closeDist * closeDist) return false;
+
+  let crossings = 0;
+  for (let i = 0; i < n; i++) {
+    const a = segments[i];
+    const b = segments[(i + 1) % n];
+
+    // Check if ray from (px, py) in +X direction crosses edge a→b
+    if ((a.y <= py && b.y > py) || (b.y <= py && a.y > py)) {
+      // Compute x-coordinate of intersection
+      const t = (py - a.y) / (b.y - a.y);
+      const ix = a.x + t * (b.x - a.x);
+      if (px < ix) {
+        crossings++;
+      }
+    }
+  }
+
+  return (crossings & 1) === 1; // odd = inside
+}
+
 // Spatial grid for food only — snake collision is brute force (airtight)
 const foodGrid = new SpatialGrid(50);
 
@@ -244,4 +286,43 @@ export function checkFoodCollisions(
   }
 
   return eats;
+}
+
+/**
+ * Containment check: if a snake's head is INSIDE a closed loop
+ * formed by another snake's body, that snake dies.
+ * This catches the case where a big snake coils around a small one
+ * and the small one never technically "touches" a body segment.
+ */
+export function checkContainmentKills(
+  snakes: Map<string, ServerSnake>
+): KillEvent[] {
+  const kills: KillEvent[] = [];
+  const alreadyDead = new Set<string>();
+
+  for (const [id, snake] of snakes) {
+    if (!snake.alive || alreadyDead.has(id)) continue;
+
+    for (const [otherId, other] of snakes) {
+      if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
+
+      // Only check if the other snake is long enough to form a loop
+      if (other.segments.length < 30) continue;
+
+      if (isPointInsideSnakeLoop(snake.headX, snake.headY, other.segments)) {
+        kills.push({
+          killer: otherId,
+          victim: id,
+          victimValue: snake.valueUsdc,
+          victimName: snake.name,
+          killerName: other.name,
+          timestamp: Date.now(),
+        });
+        alreadyDead.add(id);
+        break;
+      }
+    }
+  }
+
+  return kills;
 }
