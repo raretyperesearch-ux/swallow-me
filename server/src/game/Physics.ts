@@ -38,11 +38,11 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // BROAD PHASE: Build spatial grid of all body segments (skip head area, stride 1 for consistency)
+  // BROAD PHASE: Build spatial grid of all body segments (skip segment 0 = head position only)
   bodyGrid.clear();
   for (const [id, snake] of snakes) {
     if (!snake.alive) continue;
-    for (let i = 3; i < snake.segments.length; i += 1) {
+    for (let i = 1; i < snake.segments.length; i += 1) {
       bodyGrid.insert(id, snake.segments[i].x, snake.segments[i].y);
     }
   }
@@ -65,8 +65,8 @@ export function checkSnakeCollisions(
       const other = snakes.get(otherId);
       if (!other || !other.alive) continue;
 
-      // Precise check: iterate ALL body segments (skip first 3 = head area)
-      for (let i = 3; i < other.segments.length; i++) {
+      // Precise check: iterate body segments (skip segment 0 = head position)
+      for (let i = 1; i < other.segments.length; i++) {
         const seg = other.segments[i];
         const dSq = distanceSq(headX, headY, seg.x, seg.y);
 
@@ -174,7 +174,7 @@ export function checkFoodCollisions(
     foodGrid.insert(foodId, food.x, food.y);
   }
 
-  const eatDist = GAME_CONFIG.HEAD_RADIUS * 3;
+  const eatDist = GAME_CONFIG.HEAD_RADIUS * 2;
   const eatDistSq = eatDist * eatDist;
 
   for (const [snakeId, snake] of snakes) {
