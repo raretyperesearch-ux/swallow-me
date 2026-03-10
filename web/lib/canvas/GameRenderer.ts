@@ -515,7 +515,7 @@ export class GameRenderer {
       const segs: { x: number; y: number }[] = [];
       const len = snake.length || 40;
       const angle = snake.angle || 0;
-      const initRadius = 8 + Math.log2(Math.max(40, len)) * 2.5;
+      const initRadius = 6 + Math.pow(Math.max(1, len - 20), 0.35) * 3;
       const initSpacing = Math.max(3, initRadius * 0.7);
       for (let i = 0; i < len; i++) {
         segs.push({
@@ -1283,7 +1283,7 @@ export class GameRenderer {
         snake.segments[0].y = snake.headY;
       }
 
-      const snakeBodyRadius = 8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5;
+      const snakeBodyRadius = 6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3;
       const spacing = Math.max(3, snakeBodyRadius * 0.7);
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
@@ -1545,7 +1545,7 @@ export class GameRenderer {
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (!snake.alive || snake.segments.length < 2) return;
 
-    const bodyRadius = (8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5) * this.zoom;
+    const bodyRadius = (6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3) * this.zoom;
     const skinIdx = snake.skinId % SKIN_PATTERNS.length;
     const skin = SKIN_PATTERNS[skinIdx];
     const snakeColor = skin.primary;
@@ -1719,7 +1719,7 @@ export class GameRenderer {
     if (!this.isInView(snake.headX, snake.headY, 200)) return;
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
-    const nameBodyRadius = 8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5;
+    const nameBodyRadius = 6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3;
     const nameOffset = (nameBodyRadius + 8) * this.zoom;
     const fontSize = Math.max(9, Math.round((this.isMobile ? 11 : 13) * this.zoom));
 

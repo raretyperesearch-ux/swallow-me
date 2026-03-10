@@ -24,12 +24,11 @@ function distanceSq(x1: number, y1: number, x2: number, y2: number): number {
 }
 
 /**
- * Dynamic body radius — matches the client visual formula exactly.
- * Client: bodyRadius = (8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5) * zoom
- * Server: same formula without zoom (zoom is camera-only, not world-space).
+ * Dynamic body radius — MUST match client visual formula exactly.
+ * Small snakes are thin and nimble, big snakes are chunky.
  */
 function getBodyRadius(length: number): number {
-  return 8 + Math.log2(Math.max(40, length)) * 2.5;
+  return 6 + Math.pow(Math.max(1, length - 20), 0.35) * 3;
 }
 
 /**
