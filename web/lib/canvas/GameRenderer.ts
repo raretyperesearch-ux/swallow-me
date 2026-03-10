@@ -1,4 +1,5 @@
 import * as Colyseus from "colyseus.js";
+import type { VoicePeer } from "../voice/VoiceChat";
 
 // ─── Types ──────────────────────────────────────────
 
@@ -412,6 +413,14 @@ export class GameRenderer {
   private leaderboardCache: { name: string; valueUsdc: number; isMe: boolean }[] = [];
   private lastLeaderboardUpdate: number = 0;
 
+  // Voice chat state (set externally by SnakeGame component)
+  private voicePeers: Map<string, VoicePeer> = new Map();
+  private voiceSelfMuted: boolean = false;
+  private voiceMuteClickHandler: ((sessionId: string) => void) | null = null;
+  // Talking indicator animation: sessionId -> array of arc states
+  private talkingArcs: Map<string, { age: number; maxAge: number }[]> = new Map();
+  private lastTalkArcSpawn: Map<string, number> = new Map();
+
   // Callbacks
   public onDeath?: (data: any) => void;
   public onCashout?: (data: any) => void;
@@ -824,7 +833,8 @@ export class GameRenderer {
         const cy = this.cssH / 2;
         this.inputAngle = Math.atan2(e.clientY - cy, e.clientX - cx);
       });
-      this.canvas.addEventListener("mousedown", () => {
+      this.canvas.addEventListener("mousedown", (e) => {
+        if (this.handleVoicePanelClick(e.clientX, e.clientY)) return;
         this.mouseDown = true;
       });
       this.canvas.addEventListener("mouseup", () => {
@@ -855,6 +865,10 @@ export class GameRenderer {
           const touch = e.changedTouches[i];
           const tx = touch.clientX;
           const ty = touch.clientY;
+
+          // Voice panel tap (top-left area)
+          if (this.handleVoicePanelClick(tx, ty)) continue;
+
           const halfW = this.cssW * 0.5;
 
           // Right half of screen = boost zone
@@ -1093,6 +1107,21 @@ export class GameRenderer {
 
   public isMuted(): boolean {
     return this.audio.muted;
+  }
+
+  // ─── Public: voice chat state ─────────────────────
+
+  public updateVoiceState(peers: Map<string, VoicePeer>, selfMuted: boolean): void {
+    this.voicePeers = peers;
+    this.voiceSelfMuted = selfMuted;
+  }
+
+  public setVoiceMuteClickHandler(handler: (sessionId: string) => void): void {
+    this.voiceMuteClickHandler = handler;
+  }
+
+  public getLocalSnakes(): Map<string, any> {
+    return this.localSnakes;
   }
 
   // ─── Main Loop ────────────────────────────────────
@@ -1442,7 +1471,7 @@ export class GameRenderer {
       const snake = this.localSnakes.get(id)!;
       if (snake.alive) {
         this.drawSnake(ctx, snake, W, H, id === this.mySessionId);
-        this.drawSnakeName(ctx, snake, W, H);
+        this.drawSnakeName(ctx, snake, id, W, H);
       }
     }
 
@@ -1454,6 +1483,7 @@ export class GameRenderer {
     this.drawKillFeed(ctx, W, H);
     this.drawMinimap(ctx, W, H);
     this.drawLeaderboard(ctx, W, H);
+    this.drawVoicePanel(ctx, W, H);
     this.drawKillAnnouncement(ctx, W, H);
   }
 
@@ -1724,11 +1754,17 @@ export class GameRenderer {
     }
   }
 
-  private drawSnakeName(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number) {
+  private drawSnakeName(ctx: CanvasRenderingContext2D, snake: LocalSnake, snakeId: string, W: number, H: number) {
     if (!this.isInView(snake.headX, snake.headY, 200)) return;
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
     const bodyRadius = (6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3) * this.zoom;
+
+    // Voice talking indicator (sound wave arcs above head)
+    const voicePeer = this.voicePeers.get(snakeId);
+    if (voicePeer && voicePeer.isTalking && !voicePeer.isMutedByMe) {
+      this.drawTalkingIndicator(ctx, sx, sy, bodyRadius);
+    }
 
     // USDC value above everything
     const value = snake.valueUsdc / 1_000_000;
@@ -1755,6 +1791,27 @@ export class GameRenderer {
     ctx.strokeText(snake.name, sx, sy - nameOffset);
     ctx.fillStyle = "#ffffff";
     ctx.fillText(snake.name, sx, sy - nameOffset);
+  }
+
+  private drawTalkingIndicator(ctx: CanvasRenderingContext2D, sx: number, sy: number, bodyRadius: number) {
+    const now = Date.now();
+    const arcCount = 3;
+    const cycleTime = 900; // ms for full cycle
+    const phase = (now % cycleTime) / cycleTime;
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    for (let i = 0; i < arcCount; i++) {
+      const arcPhase = (phase + i / arcCount) % 1;
+      const radius = bodyRadius + 8 + arcPhase * 18;
+      const alpha = 0.5 * (1 - arcPhase);
+      if (alpha <= 0) continue;
+      ctx.strokeStyle = `rgba(255, 255, 255, ${alpha.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy - bodyRadius - 6, radius * 0.5, -Math.PI * 0.8, -Math.PI * 0.2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // ─── Food ─────────────────────────────────────────
@@ -1977,6 +2034,129 @@ export class GameRenderer {
       ctx.fillText(valueStr, px + panelW - padding, ey);
       ctx.textAlign = "left";
     }
+  }
+
+  // ─── Voice Chat Panel ────────────────────────────────
+
+  private drawVoicePanel(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.voicePeers.size === 0) return;
+
+    const fontSize = this.isMobile ? 9 : 12;
+    const lineH = this.isMobile ? 16 : 22;
+    const padding = this.isMobile ? 6 : 10;
+    const panelW = this.isMobile ? 110 : 150;
+    const headerH = lineH + 2;
+
+    // Position below leaderboard
+    const leaderboardEntries = this.leaderboardCache.length;
+    const leaderboardH = leaderboardEntries > 0
+      ? headerH + leaderboardEntries * (this.isMobile ? 16 : 24) + padding
+      : 0;
+    const px = 12;
+    const py = (this.isMobile ? 80 : 100) + leaderboardH + 8;
+
+    const entries = Array.from(this.voicePeers.values());
+    const panelH = headerH + entries.length * lineH + padding;
+
+    // Panel background
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.roundRect(px, py, panelW, panelH, 8);
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+
+    // Header
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#888888";
+    const micIcon = this.voiceSelfMuted ? "\u{1F507}" : "\u{1F3A4}";
+    ctx.fillText(`${micIcon} VOICE`, px + padding, py + fontSize + 4);
+
+    // Entries
+    ctx.font = `${fontSize}px Arial, sans-serif`;
+    for (let i = 0; i < entries.length; i++) {
+      const peer = entries[i];
+      const ey = py + headerH + i * lineH + fontSize;
+
+      // Status circle: green pulsing = talking, gray = silent, red = muted by me
+      const circleX = px + padding + 5;
+      const circleY = ey - fontSize / 2 + 2;
+      const circleR = 4;
+
+      ctx.beginPath();
+      ctx.arc(circleX, circleY, circleR, 0, Math.PI * 2);
+      if (peer.isMutedByMe) {
+        ctx.fillStyle = "#cc3333";
+      } else if (peer.isTalking) {
+        const pulse = 0.7 + Math.sin(Date.now() / 150) * 0.3;
+        ctx.fillStyle = `rgba(0, 255, 100, ${pulse.toFixed(2)})`;
+      } else {
+        ctx.fillStyle = "#555555";
+      }
+      ctx.fill();
+
+      // Name (truncated to 8 chars)
+      let name = peer.name;
+      if (name.length > 8) name = name.slice(0, 7) + "\u2026";
+      ctx.fillStyle = peer.isMutedByMe ? "#666666" : "#cccccc";
+      ctx.fillText(name, circleX + 10, ey);
+
+      // Strikethrough if muted by me
+      if (peer.isMutedByMe) {
+        const nameW = ctx.measureText(name).width;
+        ctx.strokeStyle = "#cc3333";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(circleX + 10, ey - fontSize / 2 + 2);
+        ctx.lineTo(circleX + 10 + nameW, ey - fontSize / 2 + 2);
+        ctx.stroke();
+      }
+
+      // Volume bar (tiny horizontal bar showing proximity volume)
+      const barX = px + panelW - padding - 24;
+      const barY = ey - fontSize / 2;
+      const barW = 20;
+      const barH = 4;
+      ctx.fillStyle = "#333333";
+      ctx.fillRect(barX, barY, barW, barH);
+      ctx.fillStyle = peer.isMutedByMe ? "#cc3333" : "#22cc66";
+      ctx.fillRect(barX, barY, barW * peer.volume, barH);
+    }
+  }
+
+  // Voice panel click handling (called from mouse/touch input)
+  private handleVoicePanelClick(clientX: number, clientY: number): boolean {
+    if (this.voicePeers.size === 0 || !this.voiceMuteClickHandler) return false;
+
+    const fontSize = this.isMobile ? 9 : 12;
+    const lineH = this.isMobile ? 16 : 22;
+    const padding = this.isMobile ? 6 : 10;
+    const panelW = this.isMobile ? 110 : 150;
+    const headerH = lineH + 2;
+
+    const leaderboardEntries = this.leaderboardCache.length;
+    const leaderboardH = leaderboardEntries > 0
+      ? headerH + leaderboardEntries * (this.isMobile ? 16 : 24) + padding
+      : 0;
+    const px = 12;
+    const py = (this.isMobile ? 80 : 100) + leaderboardH + 8;
+
+    // Check if click is within panel bounds
+    const entries = Array.from(this.voicePeers.values());
+    const panelH = headerH + entries.length * lineH + padding;
+
+    if (clientX < px || clientX > px + panelW || clientY < py || clientY > py + panelH) return false;
+
+    // Determine which entry was clicked
+    const entryIndex = Math.floor((clientY - py - headerH) / lineH);
+    if (entryIndex >= 0 && entryIndex < entries.length) {
+      const peer = entries[entryIndex];
+      this.voiceMuteClickHandler(peer.sessionId);
+      return true;
+    }
+
+    return false;
   }
 
   // ─── Kill Announcement (big center text) ───────────

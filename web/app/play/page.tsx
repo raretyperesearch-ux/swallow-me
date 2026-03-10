@@ -20,6 +20,7 @@ export default function PlayPage() {
   const [deathData, setDeathData] = useState<any>(null);
   const [cashoutData, setCashoutData] = useState<any>(null);
   const [connecting, setConnecting] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
 
   const handleJoin = async () => {
     setConnecting(true);
@@ -89,8 +90,20 @@ export default function PlayPage() {
           onChange={(e) => setPlayerName(e.target.value.slice(0, 16))}
           placeholder="Enter your name..."
           maxLength={16}
-          className="mb-6 w-64 bg-gray-800/80 border border-gray-700 rounded-lg px-4 py-3 text-center text-white placeholder-gray-500 focus:outline-none focus:border-green-400 transition-colors"
+          className="mb-4 w-64 bg-gray-800/80 border border-gray-700 rounded-lg px-4 py-3 text-center text-white placeholder-gray-500 focus:outline-none focus:border-green-400 transition-colors"
         />
+
+        <button
+          onClick={() => setVoiceEnabled(!voiceEnabled)}
+          className={`mb-6 flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
+            voiceEnabled
+              ? "border-green-500/50 bg-green-500/10 text-green-400"
+              : "border-gray-700 bg-gray-800/50 text-gray-500"
+          }`}
+        >
+          <span>{voiceEnabled ? "\u{1F399}" : "\u{1F507}"}</span>
+          <span className="text-sm">Voice Chat: {voiceEnabled ? "ON" : "OFF"}</span>
+        </button>
 
         <button
           onClick={handleJoin}
@@ -200,6 +213,7 @@ export default function PlayPage() {
         onDeath={handleDeath}
         onCashout={handleCashout}
         overlay={deathOverlay || cashoutOverlay}
+        voiceEnabled={voiceEnabled}
       />
     );
   }

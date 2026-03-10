@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState, useCallback, ReactNode } from "react";
 import * as Colyseus from "colyseus.js";
+import { useVoiceChat } from "../lib/voice/useVoiceChat";
 
 interface SnakeGameProps {
   room: Colyseus.Room;
   onDeath: (data: any) => void;
   onCashout: (data: any) => void;
   overlay?: ReactNode;
+  voiceEnabled?: boolean;
 }
 
 function isMobileDevice(): boolean {
@@ -18,15 +20,23 @@ function isMobileDevice(): boolean {
   );
 }
 
-export default function SnakeGame({ room, onDeath, onCashout, overlay }: SnakeGameProps) {
+export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnabled = true }: SnakeGameProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<any>(null);
   const [stats, setStats] = useState({ kills: 0, value: 0, alive: 0, length: 50, muted: false });
   const [mobile, setMobile] = useState(false);
+  const [localSnakes, setLocalSnakes] = useState<Map<string, any> | null>(null);
+
+  const voice = useVoiceChat(room, localSnakes, room.sessionId);
 
   useEffect(() => {
     setMobile(isMobileDevice());
   }, []);
+
+  // Sync voice enabled state from prop
+  useEffect(() => {
+    voice.setVoiceEnabled(voiceEnabled);
+  }, [voiceEnabled]);
 
   const handleToggleMute = useCallback(() => {
     if (rendererRef.current) {
@@ -34,6 +44,10 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay }: SnakeGa
       setStats((s: any) => ({ ...s, muted: rendererRef.current?.isMuted() ?? false }));
     }
   }, []);
+
+  const handleToggleVoiceMute = useCallback(() => {
+    voice.toggleSelfMute();
+  }, [voice]);
 
   useEffect(() => {
     if (!containerRef.current || rendererRef.current) return;
@@ -44,6 +58,16 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay }: SnakeGa
       renderer.onCashout = onCashout;
       renderer.onStatsUpdate = setStats;
       rendererRef.current = renderer;
+
+      // Wire voice mute click handler
+      renderer.setVoiceMuteClickHandler((sessionId: string) => {
+        const peer = voice.peers.get(sessionId);
+        if (peer?.isMutedByMe) {
+          voice.unmutePeer(sessionId);
+        } else {
+          voice.mutePeer(sessionId);
+        }
+      });
     });
 
     return () => {
@@ -51,6 +75,17 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay }: SnakeGa
       rendererRef.current = null;
     };
   }, [room]);
+
+  // Update renderer with voice state and sync localSnakes every 500ms
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (rendererRef.current) {
+        rendererRef.current.updateVoiceState(voice.peers, voice.selfMuted);
+        setLocalSnakes(rendererRef.current.getLocalSnakes());
+      }
+    }, 250);
+    return () => clearInterval(interval);
+  }, [voice.peers, voice.selfMuted]);
 
   const handleCashout = () => {
     room.send("cashout");
@@ -106,7 +141,20 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay }: SnakeGa
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Mute */}
+          {/* Voice Mute */}
+          {voiceEnabled && (
+            <button
+              onClick={handleToggleVoiceMute}
+              className={`pointer-events-auto bg-black/70 hover:bg-black/90 text-white font-bold rounded-full transition-colors backdrop-blur-sm flex items-center justify-center shrink-0 ${
+                mobile ? "w-7 h-7 text-[10px]" : "w-10 h-10 text-base"
+              } ${voice.selfMuted ? "opacity-50" : ""}`}
+              title={voice.selfMuted ? "Unmute Mic" : "Mute Mic"}
+            >
+              {voice.selfMuted ? "\u{1F507}" : "\u{1F399}"}
+            </button>
+          )}
+
+          {/* Sound Mute */}
           <button
             onClick={handleToggleMute}
             className={`pointer-events-auto bg-black/70 hover:bg-black/90 text-white font-bold rounded-full transition-colors backdrop-blur-sm flex items-center justify-center shrink-0 ${
