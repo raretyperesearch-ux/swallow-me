@@ -21,27 +21,21 @@ interface LocalSnake {
   valueUsdc: number;
 }
 
-interface DeathParticle {
+// Unified pooled particle — pre-allocated, never created/destroyed in hot path
+interface PooledParticle {
+  active: boolean;
   x: number;
   y: number;
   vx: number;
   vy: number;
   color: string;
   life: number;
-  size: number;
-}
-
-interface BoostParticle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  color: string;
-  life: number;
+  maxLife: number;
   size: number;
 }
 
 interface EatPopup {
+  active: boolean;
   x: number;
   y: number;
   life: number;
@@ -88,6 +82,42 @@ function lightenColor(hex: string, amount: number): string {
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgb(${Math.min(255, Math.floor(r + (255 - r) * amount))},${Math.min(255, Math.floor(g + (255 - g) * amount))},${Math.min(255, Math.floor(b + (255 - b) * amount))})`;
+}
+
+// Pre-allocate a particle pool — zero allocations in render loop
+function createParticlePool(size: number): PooledParticle[] {
+  const pool: PooledParticle[] = new Array(size);
+  for (let i = 0; i < size; i++) {
+    pool[i] = { active: false, x: 0, y: 0, vx: 0, vy: 0, color: '', life: 0, maxLife: 0, size: 0 };
+  }
+  return pool;
+}
+
+function createEatPopupPool(size: number): EatPopup[] {
+  const pool: EatPopup[] = new Array(size);
+  for (let i = 0; i < size; i++) {
+    pool[i] = { active: false, x: 0, y: 0, life: 0, text: '' };
+  }
+  return pool;
+}
+
+// Pre-render glow circle to offscreen canvas (cached at init, drawn via drawImage)
+function createGlowCircle(radius: number, color: string): HTMLCanvasElement {
+  const size = Math.ceil(radius * 2 + 4);
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const octx = c.getContext('2d')!;
+  const cx = size / 2;
+  const grad = octx.createRadialGradient(cx, cx, radius * 0.1, cx, cx, radius);
+  grad.addColorStop(0, color);
+  grad.addColorStop(0.6, color);
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  octx.fillStyle = grad;
+  octx.beginPath();
+  octx.arc(cx, cx, radius, 0, Math.PI * 2);
+  octx.fill();
+  return c;
 }
 
 function detectMobile(): boolean {
@@ -228,9 +258,11 @@ export class GameRenderer {
   private cssW: number = 0;
   private cssH: number = 0;
 
-  // Camera
+  // Camera (with zoom)
   private camX: number = 0;
   private camY: number = 0;
+  private zoom: number = 1;
+  private targetZoom: number = 1;
 
   // Local state
   private localSnakes: Map<string, LocalSnake> = new Map();
@@ -241,18 +273,33 @@ export class GameRenderer {
   private bgImage: HTMLImageElement | null = null;
   private assetsLoaded: boolean = false;
 
-  // Death particles
-  private particles: DeathParticle[] = [];
+  // Pre-rendered food glow caches (one per FOOD_COLOR, built at init)
+  private foodGlowSmall: HTMLCanvasElement[] = [];   // radius ~6
+  private foodGlowLarge: HTMLCanvasElement[] = [];   // radius ~10 (death food)
 
-  // Boost particles
-  private boostParticles: BoostParticle[] = [];
+  // Death particles (pre-allocated pool)
+  private deathPool: PooledParticle[] = createParticlePool(400);
+
+  // Boost particles (pre-allocated pool)
+  private boostPool: PooledParticle[] = createParticlePool(200);
   private boostFrameCounter: number = 0;
 
-  // Eat popups (+1 text)
-  private eatPopups: EatPopup[] = [];
+  // Trail particles (pre-allocated pool, additive blending)
+  private trailPool: PooledParticle[] = createParticlePool(100);
+
+  // Eat popups (pre-allocated pool)
+  private eatPopups: EatPopup[] = createEatPopupPool(30);
 
   // Track food IDs eaten via broadcast for immediate removal
   private eatenFoodIds: Set<string> = new Set();
+
+  // Pre-allocated food batch arrays (reused each frame — no allocation in render loop)
+  private foodBatchCounts: number[] = new Array(FOOD_COLORS.length).fill(0);
+  private foodBatchData: { sx: number; sy: number; r: number }[][] = FOOD_COLORS.map(() => {
+    const arr: { sx: number; sy: number; r: number }[] = [];
+    for (let j = 0; j < 300; j++) arr.push({ sx: 0, sy: 0, r: 0 });
+    return arr;
+  });
 
   // Kill feed
   private killFeed: KillFeedItem[] = [];
@@ -346,6 +393,12 @@ export class GameRenderer {
 
     this.resizeCanvas();
     this.setupInput();
+
+    // Pre-render food glow circles (one per color, cached forever)
+    for (const color of FOOD_COLORS) {
+      this.foodGlowSmall.push(createGlowCircle(16, color));   // glow for normal food
+      this.foodGlowLarge.push(createGlowCircle(24, color));   // glow for death food
+    }
 
     this.preloadAssets().then(() => {
       this.assetsLoaded = true;
@@ -487,12 +540,7 @@ export class GameRenderer {
         // Spawn "+1" popup at food position (if we can find it in state)
         const food = this.room.state.food.get(id);
         if (food) {
-          this.eatPopups.push({
-            x: food.x,
-            y: food.y,
-            life: 1.0,
-            text: "+1",
-          });
+          this.spawnEatPopup(food.x, food.y);
         }
         // Auto-clear from tracking set after 2 seconds (state sync will have caught up)
         setTimeout(() => this.eatenFoodIds.delete(id), 2000);
@@ -506,122 +554,100 @@ export class GameRenderer {
     this.room.onMessage("cashout_success", (data: any) => { this.onCashout?.(data); });
   }
 
-  // ─── Death Particles ──────────────────────────────
+  // ─── Death Particles (object pool) ──────────────────
+
+  private emitPool(pool: PooledParticle[], x: number, y: number, count: number, color: string, speed: number, life: number, sizeMin: number, sizeMax: number) {
+    let emitted = 0;
+    for (const p of pool) {
+      if (p.active || emitted >= count) continue;
+      p.active = true;
+      p.x = x;
+      p.y = y;
+      const angle = Math.random() * Math.PI * 2;
+      const spd = speed * (0.3 + Math.random() * 0.7);
+      p.vx = Math.cos(angle) * spd;
+      p.vy = Math.sin(angle) * spd;
+      p.color = color;
+      p.life = life;
+      p.maxLife = life;
+      p.size = sizeMin + Math.random() * (sizeMax - sizeMin);
+      emitted++;
+      if (emitted >= count) break;
+    }
+  }
 
   private spawnDeathParticles(worldX: number, worldY: number, skinId: number) {
     const color = SNAKE_COLORS[skinId % SNAKE_COLORS.length];
-    for (let i = 0; i < 20; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 1 + Math.random() * 4;
-      this.particles.push({
-        x: worldX,
-        y: worldY,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        color,
-        life: 1.0,
-        size: 3 + Math.random() * 5,
-      });
-    }
+    this.emitPool(this.deathPool, worldX, worldY, 30, color, 5, 1.2, 3, 8);
   }
 
-  private updateParticles() {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
+  private updatePool(pool: PooledParticle[], friction: number, lifeDrain: number) {
+    for (const p of pool) {
+      if (!p.active) continue;
       p.x += p.vx;
       p.y += p.vy;
-      p.vx *= 0.96;
-      p.vy *= 0.96;
-      p.life -= 1 / 60;
-      if (p.life <= 0) {
-        this.particles.splice(i, 1);
-      }
+      p.vx *= friction;
+      p.vy *= friction;
+      p.life -= lifeDrain;
+      if (p.life <= 0) p.active = false;
     }
   }
 
-  private drawParticles(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    for (const p of this.particles) {
+  private drawPool(ctx: CanvasRenderingContext2D, pool: PooledParticle[], W: number, H: number, additive: boolean = false) {
+    if (additive) ctx.globalCompositeOperation = 'lighter';
+    for (const p of pool) {
+      if (!p.active) continue;
+      if (!this.isInView(p.x, p.y, 30)) continue;
       const sx = this.toScreenX(p.x);
       const sy = this.toScreenY(p.y);
-      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
-
-      ctx.globalAlpha = Math.max(0, p.life);
+      const alpha = p.life / p.maxLife;
+      ctx.globalAlpha = alpha;
       ctx.fillStyle = p.color;
       ctx.beginPath();
-      ctx.arc(sx, sy, p.size * p.life, 0, Math.PI * 2);
+      ctx.arc(sx, sy, p.size * alpha, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1.0;
+    if (additive) ctx.globalCompositeOperation = 'source-over';
   }
 
-  // ─── Boost Particles ──────────────────────────────
+  // ─── Boost Particles (object pool) ──────────────────
 
   private spawnBoostParticle(snake: LocalSnake) {
     if (snake.segments.length < 3) return;
     const tail = snake.segments[snake.segments.length - 1];
     const color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 0.5 + Math.random() * 1.5;
-    this.boostParticles.push({
-      x: tail.x + (Math.random() - 0.5) * 8,
-      y: tail.y + (Math.random() - 0.5) * 8,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      color,
-      life: 1.0,
-      size: 2 + Math.random() * 4,
-    });
+    this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 8, tail.y + (Math.random() - 0.5) * 8, 1, color, 2, 0.8, 2, 5);
   }
 
-  private updateBoostParticles() {
-    for (let i = this.boostParticles.length - 1; i >= 0; i--) {
-      const p = this.boostParticles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vx *= 0.94;
-      p.vy *= 0.94;
-      p.life -= 1 / 30; // fade over ~30 frames
-      p.size *= 0.97;
-      if (p.life <= 0 || p.size < 0.5) {
-        this.boostParticles.splice(i, 1);
-      }
+  // ─── Eat Popups (object pool) ──────────────────────
+
+  private spawnEatPopup(x: number, y: number) {
+    for (const p of this.eatPopups) {
+      if (p.active) continue;
+      p.active = true;
+      p.x = x;
+      p.y = y;
+      p.life = 1.0;
+      p.text = "+1";
+      return;
     }
   }
-
-  private drawBoostParticles(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    if (this.boostParticles.length === 0) return;
-    for (const p of this.boostParticles) {
-      const sx = this.toScreenX(p.x);
-      const sy = this.toScreenY(p.y);
-      if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
-
-      ctx.globalAlpha = Math.max(0, p.life * 0.8);
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(sx, sy, p.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1.0;
-  }
-
-  // ─── Eat Popups (+1 text) ──────────────────────────
 
   private updateEatPopups() {
-    for (let i = this.eatPopups.length - 1; i >= 0; i--) {
-      const p = this.eatPopups[i];
-      p.life -= 1 / 30; // fade over ~0.5 seconds (30 frames at 60fps ≈ 0.5s)
-      p.y -= 0.5; // float upward in world coords
-      if (p.life <= 0) {
-        this.eatPopups.splice(i, 1);
-      }
+    for (const p of this.eatPopups) {
+      if (!p.active) continue;
+      p.life -= 1 / 30;
+      p.y -= 0.5;
+      if (p.life <= 0) p.active = false;
     }
   }
 
   private drawEatPopups(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    if (this.eatPopups.length === 0) return;
     ctx.font = "bold 14px Arial, sans-serif";
     ctx.textAlign = "center";
     for (const p of this.eatPopups) {
+      if (!p.active) continue;
       if (!this.isInView(p.x, p.y, 50)) continue;
       const sx = this.toScreenX(p.x);
       const sy = this.toScreenY(p.y);
@@ -635,53 +661,50 @@ export class GameRenderer {
     ctx.globalAlpha = 1.0;
   }
 
-  // ─── Kill Feed Drawing ────────────────────────────
+  // ─── Kill Feed Drawing (top-right, 3s fade) ────────
 
   private drawKillFeed(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const now = Date.now();
-    this.killFeed = this.killFeed.filter((e) => now - e.timestamp < 5000);
+    const FEED_DURATION = 3000; // 3 second fade
+    this.killFeed = this.killFeed.filter((e) => now - e.timestamp < FEED_DURATION);
     if (this.killFeed.length === 0) return;
 
-    // On mobile, position above joystick area (bottom-left, ~160px from bottom)
-    const safeBottom = this.isMobile ? 160 : 20;
-    const x = 15;
-    let y = H - safeBottom;
-    ctx.font = this.isMobile ? "10px Arial, sans-serif" : "12px Arial, sans-serif";
-    ctx.textAlign = "left";
+    const fontSize = this.isMobile ? 10 : 12;
+    ctx.font = `${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = "right";
+    const ph = this.isMobile ? 20 : 24;
+    const padding = 10;
+    // Below minimap: minimap ends at roughly my + SIZE, start below that
+    let y = this.isMobile ? (this.cssW > this.cssH ? 160 : 180) : 280;
 
-    for (let i = this.killFeed.length - 1; i >= 0; i--) {
+    for (let i = 0; i < this.killFeed.length; i++) {
       const entry = this.killFeed[i];
       const age = now - entry.timestamp;
-      const alpha = Math.max(0, 1 - age / 5000);
+      // Smooth ease-out fade: fast at start, slow at end
+      const t = age / FEED_DURATION;
+      const alpha = Math.max(0, 1 - t * t);
+      // Slide in from right
+      const slideOffset = Math.max(0, 1 - age / 200) * 30;
 
-      const text = `${entry.killerName} swallowed ${entry.victimName} +$${entry.amount.toFixed(2)}`;
+      const text = `${entry.killerName} ate ${entry.victimName} +$${entry.amount.toFixed(2)}`;
       const metrics = ctx.measureText(text);
       const pw = metrics.width + 16;
-      const ph = 22;
+      const rx = W - padding + slideOffset;
 
-      ctx.globalAlpha = alpha * 0.7;
+      ctx.globalAlpha = alpha * 0.65;
       ctx.fillStyle = "#000000";
-      const pr = 6;
       ctx.beginPath();
-      ctx.moveTo(x + pr, y - ph);
-      ctx.lineTo(x + pw - pr, y - ph);
-      ctx.quadraticCurveTo(x + pw, y - ph, x + pw, y - ph + pr);
-      ctx.lineTo(x + pw, y - pr);
-      ctx.quadraticCurveTo(x + pw, y, x + pw - pr, y);
-      ctx.lineTo(x + pr, y);
-      ctx.quadraticCurveTo(x, y, x, y - pr);
-      ctx.lineTo(x, y - ph + pr);
-      ctx.quadraticCurveTo(x, y - ph, x + pr, y - ph);
-      ctx.closePath();
+      ctx.roundRect(rx - pw, y, pw, ph, 6);
       ctx.fill();
 
       ctx.globalAlpha = alpha;
       ctx.fillStyle = "#ffffff";
-      ctx.fillText(text, x + 8, y - 6);
+      ctx.fillText(text, rx - 8, y + ph - 6);
 
-      y -= ph + 4;
+      y += ph + 3;
     }
     ctx.globalAlpha = 1.0;
+    ctx.textAlign = "left";
   }
 
   // ─── Input ────────────────────────────────────────
@@ -1055,11 +1078,11 @@ export class GameRenderer {
     ctx.fillText(statusText, W / 2, barY + 28);
   }
 
-  // ─── Viewport culling helper ──────────────────────
+  // ─── Viewport culling helper (zoom-aware) ──────────
 
   private isInView(wx: number, wy: number, margin: number = 200): boolean {
-    const sx = wx - this.camX + this.cssW / 2;
-    const sy = wy - this.camY + this.cssH / 2;
+    const sx = (wx - this.camX) * this.zoom + this.cssW / 2;
+    const sy = (wy - this.camY) * this.zoom + this.cssH / 2;
     return sx > -margin && sx < this.cssW + margin &&
            sy > -margin && sy < this.cssH + margin;
   }
@@ -1150,16 +1173,31 @@ export class GameRenderer {
       }
     }
 
-    // Update particles
-    this.updateParticles();
-    this.updateBoostParticles();
+    // Update particle pools (zero allocation)
+    this.updatePool(this.deathPool, 0.96, 1 / 60);
+    this.updatePool(this.boostPool, 0.94, 1 / 30);
+    this.updatePool(this.trailPool, 0.98, 1 / 20);
     this.updateEatPopups();
 
-    // Camera — smooth follow
+    // Camera — smooth follow + dynamic zoom
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
       this.camX += (me.headX - this.camX) * 0.1;
       this.camY += (me.headY - this.camY) * 0.1;
+
+      // Zoom out as snake grows: length 40→1.0, length 200→0.7, length 500→0.5
+      const len = me.serverLength || 40;
+      this.targetZoom = Math.max(0.5, Math.min(1.0, 1.0 - (len - 40) / 900));
+      this.zoom += (this.targetZoom - this.zoom) * 0.03;
+
+      // Trail: spawn behind head with additive blending
+      if (this.boostFrameCounter % 2 === 0) {
+        const trailColor = SNAKE_COLORS[me.skinId % SNAKE_COLORS.length];
+        const seg1 = me.segments[1];
+        if (seg1) {
+          this.emitPool(this.trailPool, seg1.x, seg1.y, 1, trailColor, 0.3, 0.5, 4, 8);
+        }
+      }
 
       // Track max length for boost energy arc
       if (me.serverLength > this.maxLengthReached) {
@@ -1182,8 +1220,8 @@ export class GameRenderer {
       this.room.send("viewport", {
         x: this.camX,
         y: this.camY,
-        w: this.cssW,
-        h: this.cssH,
+        w: this.cssW / this.zoom,
+        h: this.cssH / this.zoom,
       });
     }
   }
@@ -1197,22 +1235,21 @@ export class GameRenderer {
 
     ctx.clearRect(0, 0, W, H);
 
-    if (this.bgPattern && this.assetsLoaded) {
-      ctx.save();
-      const offsetX = -(this.camX * 0.8);
-      const offsetY = -(this.camY * 0.8);
-      ctx.translate(offsetX, offsetY);
-      ctx.fillStyle = this.bgPattern;
-      ctx.fillRect(-offsetX, -offsetY, W, H);
-      ctx.restore();
-    } else {
-      ctx.fillStyle = "#0a0a1a";
-      ctx.fillRect(0, 0, W, H);
-    }
+    // Dark background
+    ctx.fillStyle = "#0a0a1a";
+    ctx.fillRect(0, 0, W, H);
+
+    // Scrolling grid background (zoom-aware)
+    this.drawGrid(ctx, W, H);
 
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
-    this.drawBoostParticles(ctx, W, H);
+
+    // Boost particles
+    this.drawPool(ctx, this.boostPool, W, H);
+
+    // Trail effect (additive blending for glow)
+    this.drawPool(ctx, this.trailPool, W, H, true);
 
     // Sort snakes so local player draws on top
     const sortedIds: string[] = [];
@@ -1229,24 +1266,59 @@ export class GameRenderer {
       }
     }
 
-    this.drawParticles(ctx, W, H);
+    // Death explosion particles (additive for impact)
+    this.drawPool(ctx, this.deathPool, W, H, true);
     this.drawEatPopups(ctx, W, H);
+
+    // HUD elements (screen-space, not affected by zoom)
     this.drawKillFeed(ctx, W, H);
     this.drawMinimap(ctx, W, H);
   }
 
-  // ─── Coordinate helpers ───────────────────────────
+  // ─── Scrolling Grid Background ────────────────────
 
-  private toScreenX(wx: number): number { return wx - this.camX + this.cssW / 2; }
-  private toScreenY(wy: number): number { return wy - this.camY + this.cssH / 2; }
+  private drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const gridSize = 80;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    // Calculate visible world bounds
+    const halfW = (W / 2) / this.zoom;
+    const halfH = (H / 2) / this.zoom;
+    const worldLeft = this.camX - halfW;
+    const worldRight = this.camX + halfW;
+    const worldTop = this.camY - halfH;
+    const worldBottom = this.camY + halfH;
+
+    const startX = Math.floor(worldLeft / gridSize) * gridSize;
+    const startY = Math.floor(worldTop / gridSize) * gridSize;
+
+    for (let wx = startX; wx <= worldRight; wx += gridSize) {
+      const sx = this.toScreenX(wx);
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx, H);
+    }
+    for (let wy = startY; wy <= worldBottom; wy += gridSize) {
+      const sy = this.toScreenY(wy);
+      ctx.moveTo(0, sy);
+      ctx.lineTo(W, sy);
+    }
+    ctx.stroke();
+  }
+
+  // ─── Coordinate helpers (zoom-aware) ──────────────
+
+  private toScreenX(wx: number): number { return (wx - this.camX) * this.zoom + this.cssW / 2; }
+  private toScreenY(wy: number): number { return (wy - this.camY) * this.zoom + this.cssH / 2; }
 
   // ─── Snake Drawing ────────────────────────────────
 
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (!snake.alive || snake.segments.length < 2) return;
 
-    const bodyRadius = 12;
-    const headRadius = 14;
+    const bodyRadius = 12 * this.zoom;
+    const headRadius = 14 * this.zoom;
     const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     const outlineColor = darkenColor(snakeColor, 0.4);
     const useGradient = !this.isMobile;
@@ -1360,15 +1432,17 @@ export class GameRenderer {
 
     ctx.restore();
 
-    // Boost glow (behind head, in world coords)
+    // Boost glow (behind head, in world coords, additive)
     if (snake.boosting && isMe) {
-      const gradient = ctx.createRadialGradient(hsx, hsy, 0, hsx, hsy, headRadius * 5);
-      gradient.addColorStop(0, "rgba(255, 255, 100, 0.15)");
+      ctx.globalCompositeOperation = 'lighter';
+      const gradient = ctx.createRadialGradient(hsx, hsy, 0, hsx, hsy, headRadius * 4);
+      gradient.addColorStop(0, "rgba(255, 255, 100, 0.12)");
       gradient.addColorStop(1, "rgba(255, 255, 100, 0)");
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(hsx, hsy, headRadius * 5, 0, Math.PI * 2);
+      ctx.arc(hsx, hsy, headRadius * 4, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
     }
   }
 
@@ -1376,14 +1450,16 @@ export class GameRenderer {
     if (!this.isInView(snake.headX, snake.headY, 200)) return;
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
+    const nameOffset = 22 * this.zoom;
+    const fontSize = Math.max(9, Math.round((this.isMobile ? 11 : 13) * this.zoom));
 
-    ctx.font = this.isMobile ? "bold 11px Arial, sans-serif" : "bold 13px Arial, sans-serif";
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
     ctx.textAlign = "center";
     ctx.strokeStyle = "#000000";
     ctx.lineWidth = 3;
-    ctx.strokeText(snake.name, sx, sy - 22);
+    ctx.strokeText(snake.name, sx, sy - nameOffset);
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(snake.name, sx, sy - 22);
+    ctx.fillText(snake.name, sx, sy - nameOffset);
   }
 
   // ─── Food ─────────────────────────────────────────
@@ -1392,55 +1468,52 @@ export class GameRenderer {
     const time = Date.now();
     // On mobile, only render food within tight margin for performance
     const foodViewMargin = this.isMobile ? -100 : 50;
+    const drawGlow = !this.isMobile && this.foodGlowSmall.length > 0;
 
-    // Batch food by color — one path per color reduces state changes
-    const glowBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
-    const solidBatches = new Map<string, { sx: number; sy: number; r: number }[]>();
+    // Reset pre-allocated batch counts (zero allocation)
+    for (let i = 0; i < FOOD_COLORS.length; i++) this.foodBatchCounts[i] = 0;
 
     this.room.state.food.forEach((food: any, foodId: string) => {
-      // Skip food that was eaten (broadcast arrived before state sync)
       if (this.eatenFoodIds.has(foodId)) return;
       if (!this.isInView(food.x, food.y, foodViewMargin)) return;
+
       const sx = this.toScreenX(food.x);
       const sy = this.toScreenY(food.y);
-
       const isDeath = food.size === 2;
-      const baseSize = isDeath ? 10 : 6; // increased from 8/4
+      const baseSize = (isDeath ? 10 : 6) * this.zoom;
       const pulse = 1 + Math.sin(time / 400 + food.x * 0.1 + food.y * 0.1) * 0.2;
       const r = baseSize * pulse;
-
       const colorIdx = Math.abs(Math.floor(food.x * 7 + food.y * 13)) % FOOD_COLORS.length;
-      const color = FOOD_COLORS[colorIdx];
 
-      if (!this.isMobile) {
-        if (!glowBatches.has(color)) glowBatches.set(color, []);
-        glowBatches.get(color)!.push({ sx, sy, r: r * 2.5 });
+      // Draw pre-rendered glow circle (desktop only, GPU-accelerated drawImage)
+      if (drawGlow) {
+        const glowImg = isDeath ? this.foodGlowLarge[colorIdx] : this.foodGlowSmall[colorIdx];
+        if (glowImg) {
+          const glowSize = r * 4;
+          ctx.globalAlpha = 0.35;
+          ctx.drawImage(glowImg, sx - glowSize / 2, sy - glowSize / 2, glowSize, glowSize);
+        }
       }
 
-      if (!solidBatches.has(color)) solidBatches.set(color, []);
-      solidBatches.get(color)!.push({ sx, sy, r });
+      // Write into pre-allocated batch slot
+      const idx = this.foodBatchCounts[colorIdx];
+      if (idx < this.foodBatchData[colorIdx].length) {
+        const slot = this.foodBatchData[colorIdx][idx];
+        slot.sx = sx; slot.sy = sy; slot.r = r;
+        this.foodBatchCounts[colorIdx]++;
+      }
     });
 
-    // Draw glow halos (skip on mobile)
-    if (!this.isMobile) {
-      ctx.globalAlpha = 0.2;
-      for (const [color, items] of glowBatches) {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        for (const item of items) {
-          ctx.moveTo(item.sx + item.r, item.sy);
-          ctx.arc(item.sx, item.sy, item.r, 0, Math.PI * 2);
-        }
-        ctx.fill();
-      }
-    }
-
-    // Draw solid food
+    // Draw solid food, batched by color
     ctx.globalAlpha = 1.0;
-    for (const [color, items] of solidBatches) {
-      ctx.fillStyle = color;
+    for (let i = 0; i < FOOD_COLORS.length; i++) {
+      const count = this.foodBatchCounts[i];
+      if (count === 0) continue;
+      ctx.fillStyle = FOOD_COLORS[i];
       ctx.beginPath();
-      for (const item of items) {
+      const batch = this.foodBatchData[i];
+      for (let j = 0; j < count; j++) {
+        const item = batch[j];
         ctx.moveTo(item.sx + item.r, item.sy);
         ctx.arc(item.sx, item.sy, item.r, 0, Math.PI * 2);
       }
@@ -1453,7 +1526,7 @@ export class GameRenderer {
   private drawBoundary(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const cx = this.toScreenX(0);
     const cy = this.toScreenY(0);
-    const radius = this.arenaRadius;
+    const radius = this.arenaRadius * this.zoom;
     if (cx + radius < -100 || cx - radius > W + 100 || cy + radius < -100 || cy - radius > H + 100) return;
 
     ctx.strokeStyle = "rgba(255, 0, 68, 0.15)";
