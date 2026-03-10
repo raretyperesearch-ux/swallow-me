@@ -12,7 +12,7 @@ export const GAME_CONFIG = {
   // Snake movement (tuned for 30Hz — smooth, not snappy)
   BASE_SPEED: 8.0, // Normal movement speed (units per tick)
   BOOST_SPEED: 16.0, // Speed while boosting
-  TURN_RATE: 0.05, // Max radians per tick (responsive turning)
+  TURN_RATE: 0.15, // Max radians per tick (~4.5 rad/sec at 30Hz, full 360 in ~1.4s)
   BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 

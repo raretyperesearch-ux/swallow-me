@@ -1215,8 +1215,8 @@ export class GameRenderer {
     this.boostFrameCounter++;
 
     // Exponential smoothing factors — frame-rate independent
-    // turnRate: ~8 rad/sec → at 60fps=0.13/frame, at 30fps=0.27/frame
-    const turnLerp = 1 - Math.exp(-8 * dt);
+    const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
+    const otherTurnLerp = 0.25; // Other players: responsive, not laggy
     // Server position blend: converge in ~6 frames at 60fps
     const serverBlend = 1 - Math.pow(0.001, dt);
     // Other player lerp: faster convergence
@@ -1264,12 +1264,12 @@ export class GameRenderer {
         snake.headX += (snake.serverHeadX - snake.headX) * otherBlend;
         snake.headY += (snake.serverHeadY - snake.headY) * otherBlend;
 
-        // Smooth angle for others (dt-based)
+        // Smooth angle for others
         const targetAngle = snake.serverAngle;
         let angleDiff = targetAngle - snake.angle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * turnLerp;
+        snake.angle += angleDiff * otherTurnLerp;
 
         // Boost particles for others too (visible)
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
