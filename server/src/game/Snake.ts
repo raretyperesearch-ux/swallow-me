@@ -49,13 +49,6 @@ export function createSnake(
     });
   }
 
-  // Debug: verify segment spacing on creation
-  if (segments.length >= 2) {
-    const sdx = segments[1].x - segments[0].x;
-    const sdy = segments[1].y - segments[0].y;
-    console.log(`[SNAKE] ${id} created with ${segments.length} segments, spacing: ${Math.sqrt(sdx*sdx + sdy*sdy).toFixed(1)}`);
-  }
-
   return {
     id,
     name,
