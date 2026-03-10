@@ -124,7 +124,7 @@ export function checkSnakeCollisions(
     }
   }
 
-  // HEAD vs HEAD: both die — dynamic radius per snake
+  // HEAD vs HEAD: bigger snake eats smaller, same size = both die
   for (const [idA, a] of snakes) {
     if (!a.alive || alreadyDead.has(idA)) continue;
 
@@ -132,30 +132,40 @@ export function checkSnakeCollisions(
       if (idB <= idA || !b.alive || alreadyDead.has(idB)) continue;
 
       const headCollDist = getBodyRadius(a.length) + getBodyRadius(b.length);
-      const headCollDistSq = headCollDist * headCollDist;
-      const hitPoint = distanceSq(a.headX, a.headY, b.headX, b.headY) < headCollDistSq;
-      const hitSweptA = lineCircleIntersect(a.prevHeadX, a.prevHeadY, a.headX, a.headY, b.headX, b.headY, headCollDist);
-      const hitSweptB = lineCircleIntersect(b.prevHeadX, b.prevHeadY, b.headX, b.headY, a.headX, a.headY, headCollDist);
+      const dSq = distanceSq(a.headX, a.headY, b.headX, b.headY);
 
-      if (hitPoint || hitSweptA || hitSweptB) {
-        kills.push({
-          killer: null,
-          victim: idA,
-          victimValue: a.valueUsdc,
-          victimName: a.name,
-          killerName: "",
-          timestamp: Date.now(),
-        });
-        kills.push({
-          killer: null,
-          victim: idB,
-          victimValue: b.valueUsdc,
-          victimName: b.name,
-          killerName: "",
-          timestamp: Date.now(),
-        });
-        alreadyDead.add(idA);
-        alreadyDead.add(idB);
+      if (dSq < headCollDist * headCollDist) {
+        if (a.length > b.length * 1.1) {
+          // A is bigger — A kills B
+          kills.push({
+            killer: idA, victim: idB,
+            victimValue: b.valueUsdc, victimName: b.name, killerName: a.name,
+            timestamp: Date.now(),
+          });
+          alreadyDead.add(idB);
+        } else if (b.length > a.length * 1.1) {
+          // B is bigger — B kills A
+          kills.push({
+            killer: idB, victim: idA,
+            victimValue: a.valueUsdc, victimName: a.name, killerName: b.name,
+            timestamp: Date.now(),
+          });
+          alreadyDead.add(idA);
+        } else {
+          // Same size — both die
+          kills.push({
+            killer: null, victim: idA,
+            victimValue: a.valueUsdc, victimName: a.name, killerName: "",
+            timestamp: Date.now(),
+          });
+          kills.push({
+            killer: null, victim: idB,
+            victimValue: b.valueUsdc, victimName: b.name, killerName: "",
+            timestamp: Date.now(),
+          });
+          alreadyDead.add(idA);
+          alreadyDead.add(idB);
+        }
       }
     }
   }

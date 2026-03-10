@@ -1719,10 +1719,26 @@ export class GameRenderer {
     if (!this.isInView(snake.headX, snake.headY, 200)) return;
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
-    const nameBodyRadius = 6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3;
-    const nameOffset = (nameBodyRadius + 8) * this.zoom;
-    const fontSize = Math.max(9, Math.round((this.isMobile ? 11 : 13) * this.zoom));
+    const bodyRadius = (6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3) * this.zoom;
 
+    // USDC value above everything
+    const value = snake.valueUsdc / 1_000_000;
+    if (value > 0) {
+      const valueOffset = bodyRadius + (this.isMobile ? 28 : 34);
+      const valueFontSize = Math.max(8, Math.round((this.isMobile ? 10 : 12) * this.zoom));
+      ctx.font = `bold ${valueFontSize}px Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 3;
+      const valueText = `$${value.toFixed(2)}`;
+      ctx.strokeText(valueText, sx, sy - valueOffset);
+      ctx.fillStyle = "#22cc44";
+      ctx.fillText(valueText, sx, sy - valueOffset);
+    }
+
+    // Name below the value
+    const nameOffset = bodyRadius + (this.isMobile ? 16 : 20);
+    const fontSize = Math.max(9, Math.round((this.isMobile ? 11 : 13) * this.zoom));
     ctx.font = `bold ${fontSize}px Arial, sans-serif`;
     ctx.textAlign = "center";
     ctx.strokeStyle = "#000000";
