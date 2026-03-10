@@ -1563,7 +1563,7 @@ export class GameRenderer {
     if (segCount <= 300) {
       ctx.strokeStyle = "rgba(0, 0, 0, 0.06)";
       ctx.lineWidth = 1;
-      for (let i = segCount - 1; i >= 2; i += 3) {
+      for (let i = 2; i < segCount; i += 3) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
