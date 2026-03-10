@@ -483,7 +483,7 @@ export class GameRenderer {
       const len = snake.length || 40;
       const angle = snake.angle || 0;
       const initRadius = 8 + Math.log2(Math.max(40, len)) * 2.5;
-      const initSpacing = Math.max(4, initRadius * 0.35);
+      const initSpacing = Math.max(3, initRadius * 0.7);
       for (let i = 0; i < len; i++) {
         segs.push({
           x: snake.headX - Math.cos(angle) * i * initSpacing,
@@ -1248,7 +1248,7 @@ export class GameRenderer {
       }
 
       const snakeBodyRadius = 8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5;
-      const spacing = Math.max(4, snakeBodyRadius * 0.35);
+      const spacing = Math.max(3, snakeBodyRadius * 0.7);
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
@@ -1414,33 +1414,60 @@ export class GameRenderer {
     tile.height = Math.ceil(tileH);
     const tctx = tile.getContext("2d")!;
 
-    // Fill with base background
+    // Darkest background (visible in gaps between hexes)
     tctx.fillStyle = "#050508";
     tctx.fillRect(0, 0, tile.width, tile.height);
 
-    tctx.strokeStyle = "rgba(255, 255, 255, 0.03)";
-    tctx.lineWidth = 1;
-    tctx.fillStyle = "#0a0a0f";
+    // Hex vertex helper
+    const hexVertex = (cx: number, cy: number, i: number) => {
+      const angle = (Math.PI / 3) * i - Math.PI / 6; // flat-top
+      return { x: cx + hexR * Math.cos(angle), y: cy + hexR * Math.sin(angle) };
+    };
 
-    // Draw hexagon helper
     const drawHex = (cx: number, cy: number) => {
+      // Get all 6 vertices
+      const verts = [];
+      for (let i = 0; i < 6; i++) verts.push(hexVertex(cx, cy, i));
+
+      // Fill hex base
       tctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i - Math.PI / 6; // flat-top
-        const hx = cx + hexR * Math.cos(angle);
-        const hy = cy + hexR * Math.sin(angle);
-        if (i === 0) tctx.moveTo(hx, hy);
-        else tctx.lineTo(hx, hy);
-      }
+      tctx.moveTo(verts[0].x, verts[0].y);
+      for (let i = 1; i < 6; i++) tctx.lineTo(verts[i].x, verts[i].y);
       tctx.closePath();
+      tctx.fillStyle = "#0a0a10";
       tctx.fill();
-      tctx.stroke();
+
+      // Inner concave gradient (dished look)
+      const innerGrad = tctx.createRadialGradient(cx, cy, 0, cx, cy, hexR * 0.9);
+      innerGrad.addColorStop(0, "rgba(255, 255, 255, 0.02)");
+      innerGrad.addColorStop(1, "rgba(0, 0, 0, 0.06)");
+      tctx.beginPath();
+      tctx.moveTo(verts[0].x, verts[0].y);
+      for (let i = 1; i < 6; i++) tctx.lineTo(verts[i].x, verts[i].y);
+      tctx.closePath();
+      tctx.fillStyle = innerGrad;
+      tctx.fill();
+
+      // Draw edges individually: top-left = highlight, bottom-right = shadow
+      tctx.lineWidth = 1;
+      for (let i = 0; i < 6; i++) {
+        const v1 = verts[i];
+        const v2 = verts[(i + 1) % 6];
+        tctx.beginPath();
+        tctx.moveTo(v1.x, v1.y);
+        tctx.lineTo(v2.x, v2.y);
+        // Edges 0,1,2 = top-left highlight; 3,4,5 = bottom-right shadow
+        if (i <= 2) {
+          tctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+        } else {
+          tctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
+        }
+        tctx.stroke();
+      }
     };
 
     // Two hexagons per unit cell for honeycomb tiling
-    // Hex 1: top-left
     drawHex(0, hexR);
-    // Hex 2: offset center-right (honeycomb offset)
     drawHex(tileW / 2, hexR * 2.5);
 
     this.hexPattern = this.ctx.createPattern(tile, "repeat");
@@ -1471,60 +1498,83 @@ export class GameRenderer {
     const bodyRadius = (8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5) * this.zoom;
     const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     const outlineColor = darkenColor(snakeColor, 0.4);
+    const highlightColor = lightenColor(snakeColor, 0.2);
+    const shadowColor = darkenColor(snakeColor, 0.15);
 
-    // --- BODY PASS: gradient for all platforms (batch fallback only for 200+ segments) ---
     ctx.globalAlpha = 1.0;
     const segCount = snake.segments.length;
-    if (segCount > 200) {
-      // Very long snakes: batched flat fill for performance
-      ctx.fillStyle = outlineColor;
-      ctx.beginPath();
-      for (let i = segCount - 1; i >= 1; i--) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        ctx.moveTo(sx + bodyRadius + 2, sy);
-        ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
-      }
-      ctx.fill();
-      ctx.fillStyle = snakeColor;
-      ctx.beginPath();
-      for (let i = segCount - 1; i >= 1; i--) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        ctx.moveTo(sx + bodyRadius, sy);
-        ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
-      }
-      ctx.fill();
-    } else {
-      // Per-segment dark outline + radial gradient (same on mobile & desktop)
-      for (let i = segCount - 1; i >= 1; i--) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
 
-        // Dark outline
-        ctx.beginPath();
-        ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
-        ctx.fillStyle = outlineColor;
-        ctx.fill();
+    // --- PASS 1: Dark outline (slightly larger circles, batched) ---
+    ctx.fillStyle = outlineColor;
+    ctx.beginPath();
+    for (let i = segCount - 1; i >= 0; i--) {
+      const seg = snake.segments[i];
+      if (!this.isInView(seg.x, seg.y, 200)) continue;
+      const sx = this.toScreenX(seg.x);
+      const sy = this.toScreenY(seg.y);
+      ctx.moveTo(sx + bodyRadius + 2, sy);
+      ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
+    }
+    ctx.fill();
 
-        // 3D gradient fill
-        const grad = ctx.createRadialGradient(sx - 2, sy - 2, 0, sx, sy, bodyRadius);
-        grad.addColorStop(0, lightenColor(snakeColor, 0.3));
-        grad.addColorStop(1, snakeColor);
-        ctx.fillStyle = grad;
+    // --- PASS 2: Solid base color (continuous smooth tube) ---
+    ctx.fillStyle = snakeColor;
+    ctx.beginPath();
+    for (let i = segCount - 1; i >= 0; i--) {
+      const seg = snake.segments[i];
+      if (!this.isInView(seg.x, seg.y, 200)) continue;
+      const sx = this.toScreenX(seg.x);
+      const sy = this.toScreenY(seg.y);
+      ctx.moveTo(sx + bodyRadius, sy);
+      ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    // --- PASS 3: Highlight strip along top edge of body ---
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    for (let i = segCount - 1; i >= 0; i--) {
+      const seg = snake.segments[i];
+      if (!this.isInView(seg.x, seg.y, 200)) continue;
+      const sx = this.toScreenX(seg.x);
+      const sy = this.toScreenY(seg.y) - bodyRadius * 0.3;
+      ctx.moveTo(sx + bodyRadius * 0.55, sy);
+      ctx.arc(sx, sy, bodyRadius * 0.55, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    // --- PASS 4: Shadow strip along bottom edge of body ---
+    ctx.fillStyle = "#000000";
+    ctx.globalAlpha = 0.12;
+    ctx.beginPath();
+    for (let i = segCount - 1; i >= 0; i--) {
+      const seg = snake.segments[i];
+      if (!this.isInView(seg.x, seg.y, 200)) continue;
+      const sx = this.toScreenX(seg.x);
+      const sy = this.toScreenY(seg.y) + bodyRadius * 0.35;
+      ctx.moveTo(sx + bodyRadius * 0.5, sy);
+      ctx.arc(sx, sy, bodyRadius * 0.5, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+
+    // --- PASS 5: Subtle segment ridges ---
+    if (segCount <= 300) {
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.06)";
+      ctx.lineWidth = 1;
+      for (let i = segCount - 1; i >= 2; i += 3) {
+        const seg = snake.segments[i];
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
         ctx.beginPath();
-        ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.arc(sx, sy, bodyRadius * 0.9, 0, Math.PI * 2);
+        ctx.stroke();
       }
     }
 
-    // --- HEAD (oval + big eyes with shine) ---
+    // --- HEAD (seamless with body + eyes on top) ---
     const head = snake.segments[0];
     if (!this.isInView(head.x, head.y, 200)) return;
 
@@ -1533,24 +1583,6 @@ export class GameRenderer {
     ctx.save();
     ctx.translate(hsx, hsy);
     ctx.rotate(snake.angle);
-
-    // Circle head shape (same size as body — slither.io style)
-    ctx.beginPath();
-    ctx.arc(0, 0, bodyRadius + 2, 0, Math.PI * 2);
-    ctx.fillStyle = outlineColor;
-    ctx.fill();
-
-    if (segCount <= 200) {
-      const headGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, bodyRadius);
-      headGrad.addColorStop(0, lightenColor(snakeColor, 0.3));
-      headGrad.addColorStop(1, snakeColor);
-      ctx.fillStyle = headGrad;
-    } else {
-      ctx.fillStyle = snakeColor;
-    }
-    ctx.beginPath();
-    ctx.arc(0, 0, bodyRadius, 0, Math.PI * 2);
-    ctx.fill();
 
     // Eye parameters (scaled to fit inside bodyRadius)
     const eyeOffsetX = bodyRadius * 0.25;
