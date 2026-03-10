@@ -1385,16 +1385,39 @@ export class GameRenderer {
     if (!snake.alive || snake.segments.length < 2) return;
 
     const bodyRadius = 12 * this.zoom;
-    const headRadius = 14 * this.zoom;
     const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     const outlineColor = darkenColor(snakeColor, 0.4);
-    const useGradient = !this.isMobile;
 
-    // --- BODY PASS (uniform solid color, no sprites) ---
+    // --- BODY PASS: gradient for all platforms (batch fallback only for 200+ segments) ---
     ctx.globalAlpha = 1.0;
-    if (useGradient) {
-      // Desktop: per-segment dark outline + radial gradient, uniform color
-      for (let i = snake.segments.length - 1; i >= 1; i--) {
+    const segCount = snake.segments.length;
+    if (segCount > 200) {
+      // Very long snakes: batched flat fill for performance
+      ctx.fillStyle = outlineColor;
+      ctx.beginPath();
+      for (let i = segCount - 1; i >= 1; i--) {
+        const seg = snake.segments[i];
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        ctx.moveTo(sx + bodyRadius + 2, sy);
+        ctx.arc(sx, sy, bodyRadius + 2, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.fillStyle = snakeColor;
+      ctx.beginPath();
+      for (let i = segCount - 1; i >= 1; i--) {
+        const seg = snake.segments[i];
+        if (!this.isInView(seg.x, seg.y, 200)) continue;
+        const sx = this.toScreenX(seg.x);
+        const sy = this.toScreenY(seg.y);
+        ctx.moveTo(sx + bodyRadius, sy);
+        ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    } else {
+      // Per-segment dark outline + radial gradient (same on mobile & desktop)
+      for (let i = segCount - 1; i >= 1; i--) {
         const seg = snake.segments[i];
         if (!this.isInView(seg.x, seg.y, 200)) continue;
         const sx = this.toScreenX(seg.x);
@@ -1415,19 +1438,6 @@ export class GameRenderer {
         ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
         ctx.fill();
       }
-    } else {
-      // Mobile: single batched fill, uniform color
-      ctx.fillStyle = snakeColor;
-      ctx.beginPath();
-      for (let i = snake.segments.length - 1; i >= 1; i--) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        ctx.moveTo(sx + bodyRadius, sy);
-        ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
-      }
-      ctx.fill();
     }
 
     // --- HEAD (oval + big eyes with shine) ---
@@ -1440,20 +1450,29 @@ export class GameRenderer {
     ctx.translate(hsx, hsy);
     ctx.rotate(snake.angle);
 
-    // Circle head shape (1.4x body radius)
+    // Circle head shape (same size as body — slither.io style)
     ctx.beginPath();
-    ctx.arc(0, 0, bodyRadius * 1.4, 0, Math.PI * 2);
-    ctx.fillStyle = snakeColor;
+    ctx.arc(0, 0, bodyRadius + 2, 0, Math.PI * 2);
+    ctx.fillStyle = outlineColor;
     ctx.fill();
-    ctx.strokeStyle = darkenColor(snakeColor, 0.4);
-    ctx.lineWidth = 2;
-    ctx.stroke();
 
-    // Eye parameters
-    const eyeOffsetX = headRadius * 0.3;
-    const eyeOffsetY = headRadius * 0.45;
-    const eyeRadius = headRadius * 0.38;
-    const pupilRadius = headRadius * 0.2;
+    if (segCount <= 200) {
+      const headGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, bodyRadius);
+      headGrad.addColorStop(0, lightenColor(snakeColor, 0.3));
+      headGrad.addColorStop(1, snakeColor);
+      ctx.fillStyle = headGrad;
+    } else {
+      ctx.fillStyle = snakeColor;
+    }
+    ctx.beginPath();
+    ctx.arc(0, 0, bodyRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eye parameters (scaled to fit inside bodyRadius)
+    const eyeOffsetX = bodyRadius * 0.25;
+    const eyeOffsetY = bodyRadius * 0.35;
+    const eyeRadius = bodyRadius * 0.3;
+    const pupilRadius = bodyRadius * 0.15;
 
     // Left eye (top side when angle=0)
     ctx.beginPath();
@@ -1502,12 +1521,12 @@ export class GameRenderer {
     // Boost glow (behind head, in world coords, additive)
     if (snake.boosting && isMe) {
       ctx.globalCompositeOperation = 'lighter';
-      const gradient = ctx.createRadialGradient(hsx, hsy, 0, hsx, hsy, headRadius * 4);
+      const gradient = ctx.createRadialGradient(hsx, hsy, 0, hsx, hsy, bodyRadius * 4);
       gradient.addColorStop(0, "rgba(255, 255, 100, 0.12)");
       gradient.addColorStop(1, "rgba(255, 255, 100, 0)");
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(hsx, hsy, headRadius * 4, 0, Math.PI * 2);
+      ctx.arc(hsx, hsy, bodyRadius * 4, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalCompositeOperation = 'source-over';
     }
