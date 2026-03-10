@@ -49,8 +49,6 @@ interface KillFeedItem {
   timestamp: number;
 }
 
-const SEGMENT_SPACING = 4;
-
 const FOOD_COLORS = [
   "#FF3333", "#FFFF44", "#33FF55", "#FF44FF",
   "#FFFFFF", "#44FFFF", "#88FF22", "#FFDD22",
@@ -475,10 +473,12 @@ export class GameRenderer {
       const segs: { x: number; y: number }[] = [];
       const len = snake.length || 40;
       const angle = snake.angle || 0;
+      const initRadius = 8 + Math.log2(Math.max(40, len)) * 2.5;
+      const initSpacing = Math.max(4, initRadius * 0.35);
       for (let i = 0; i < len; i++) {
         segs.push({
-          x: snake.headX - Math.cos(angle) * i * SEGMENT_SPACING,
-          y: snake.headY - Math.sin(angle) * i * SEGMENT_SPACING,
+          x: snake.headX - Math.cos(angle) * i * initSpacing,
+          y: snake.headY - Math.sin(angle) * i * initSpacing,
         });
       }
 
@@ -519,8 +519,8 @@ export class GameRenderer {
 
     this.room.state.snakes.onRemove((_: any, key: string) => {
       const snake = this.localSnakes.get(key);
-      if (snake) {
-        this.spawnDeathParticles(snake.headX, snake.headY, snake.skinId);
+      if (snake && snake.alive && this.isInView(snake.headX, snake.headY, 200)) {
+        this.spawnDeathParticles(snake.headX, snake.headY, snake.skinId, key === this.mySessionId);
       }
       this.localSnakes.delete(key);
     });
@@ -540,21 +540,27 @@ export class GameRenderer {
       const me = this.localSnakes.get(this.mySessionId);
       if (me && entry.killerName === me.name) {
         this.audio.playKill();
+        this.shakeLife = 0.2;
       }
       const maxFeed = this.isMobile ? 3 : 5;
       while (this.killFeed.length > maxFeed) this.killFeed.shift();
     });
 
     // Handle food_eaten broadcast for immediate client-side removal
-    this.room.onMessage("food_eaten", (data: { ids: string[] }) => {
-      this.audio.playEat();
+    this.room.onMessage("food_eaten", (data: { ids: string[]; eaterId: string }) => {
+      const isMe = data.eaterId === this.mySessionId;
+      if (isMe) {
+        this.audio.playEat();
+      }
       // Track eaten food IDs so drawFood skips them immediately
       for (const id of data.ids) {
         this.eatenFoodIds.add(id);
-        // Spawn "+1" popup at food position (if we can find it in state)
-        const food = this.room.state.food.get(id);
-        if (food) {
-          this.spawnEatPopup(food.x, food.y);
+        // Only show "+1" popup for my own eats
+        if (isMe) {
+          const food = this.room.state.food.get(id);
+          if (food) {
+            this.spawnEatPopup(food.x, food.y);
+          }
         }
         // Auto-clear from tracking set after 2 seconds (state sync will have caught up)
         setTimeout(() => this.eatenFoodIds.delete(id), 2000);
@@ -590,11 +596,12 @@ export class GameRenderer {
     }
   }
 
-  private spawnDeathParticles(worldX: number, worldY: number, skinId: number) {
+  private spawnDeathParticles(worldX: number, worldY: number, skinId: number, shakeScreen: boolean) {
     const color = SNAKE_COLORS[skinId % SNAKE_COLORS.length];
     this.emitPool(this.deathPool, worldX, worldY, 50, color, 6, 1.5, 4, 12);
-    // Screen shake on death
-    this.shakeLife = 0.2;
+    if (shakeScreen) {
+      this.shakeLife = 0.2;
+    }
   }
 
   private updatePool(pool: PooledParticle[], friction: number, lifeDrain: number) {
@@ -1203,6 +1210,8 @@ export class GameRenderer {
         snake.segments[0].y = snake.headY;
       }
 
+      const snakeBodyRadius = 8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5;
+      const spacing = Math.max(4, snakeBodyRadius * 0.35);
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
@@ -1210,10 +1219,10 @@ export class GameRenderer {
         const dy = curr.y - prev.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist > SEGMENT_SPACING) {
+        if (dist > spacing) {
           const angle = Math.atan2(dy, dx);
-          curr.x = prev.x + Math.cos(angle) * SEGMENT_SPACING;
-          curr.y = prev.y + Math.sin(angle) * SEGMENT_SPACING;
+          curr.x = prev.x + Math.cos(angle) * spacing;
+          curr.y = prev.y + Math.sin(angle) * spacing;
         }
       }
 
@@ -1384,7 +1393,7 @@ export class GameRenderer {
   private drawSnake(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number, isMe: boolean) {
     if (!snake.alive || snake.segments.length < 2) return;
 
-    const bodyRadius = 12 * this.zoom;
+    const bodyRadius = (8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5) * this.zoom;
     const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     const outlineColor = darkenColor(snakeColor, 0.4);
 
@@ -1536,7 +1545,8 @@ export class GameRenderer {
     if (!this.isInView(snake.headX, snake.headY, 200)) return;
     const sx = this.toScreenX(snake.headX);
     const sy = this.toScreenY(snake.headY);
-    const nameOffset = 22 * this.zoom;
+    const nameBodyRadius = 8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5;
+    const nameOffset = (nameBodyRadius + 8) * this.zoom;
     const fontSize = Math.max(9, Math.round((this.isMobile ? 11 : 13) * this.zoom));
 
     ctx.font = `bold ${fontSize}px Arial, sans-serif`;

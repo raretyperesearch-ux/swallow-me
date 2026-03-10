@@ -13,7 +13,7 @@ import { updateBotInput } from "./BotAI";
 export interface GameLoopCallbacks {
   onKill: (event: KillEvent) => void;
   onBoostFoodDrop: (x: number, y: number) => void;
-  onFoodEaten: (foodIds: string[]) => void;
+  onFoodEaten: (eats: { foodId: string; snakeId: string }[]) => void;
   onFoodSpawned: (foods: ServerFood[]) => void;
 }
 
@@ -86,7 +86,7 @@ export function runGameTick(
 
   // 5. Check food consumption (uses spatial grid internally)
   const foodEats = checkFoodCollisions(snakes, foods);
-  const eatenFoodIds: string[] = [];
+  const eatenFoods: { foodId: string; snakeId: string }[] = [];
   for (const eat of foodEats) {
     const snake = snakes.get(eat.snakeId);
     const food = foods.get(eat.foodId);
@@ -96,13 +96,13 @@ export function runGameTick(
         : GAME_CONFIG.FOOD_VALUE;
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
-      eatenFoodIds.push(eat.foodId);
+      eatenFoods.push({ foodId: eat.foodId, snakeId: eat.snakeId });
     }
   }
 
   // Notify clients of eaten food IDs for immediate removal
-  if (eatenFoodIds.length > 0) {
-    callbacks.onFoodEaten(eatenFoodIds);
+  if (eatenFoods.length > 0) {
+    callbacks.onFoodEaten(eatenFoods);
   }
 
   // 6. Natural food spawning (maintain minimum)

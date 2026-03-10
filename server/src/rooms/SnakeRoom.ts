@@ -179,12 +179,21 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         this.serverFoods.set(food.id, food);
         this.addFoodToState(food);
       },
-      onFoodEaten: (foodIds) => {
-        // Broadcast eaten food IDs to all clients for immediate removal
-        this.broadcast("food_eaten", { ids: foodIds });
+      onFoodEaten: (eats) => {
+        // Group eaten food by eater for client-side filtering
+        const byEater = new Map<string, string[]>();
+        for (const eat of eats) {
+          let arr = byEater.get(eat.snakeId);
+          if (!arr) { arr = []; byEater.set(eat.snakeId, arr); }
+          arr.push(eat.foodId);
+        }
+        // Broadcast with eater info so clients can filter sounds/popups
+        for (const [eaterId, ids] of byEater) {
+          this.broadcast("food_eaten", { ids, eaterId });
+        }
         // Remove from Colyseus state
-        for (const id of foodIds) {
-          this.removeFoodFromState(id);
+        for (const eat of eats) {
+          this.removeFoodFromState(eat.foodId);
         }
       },
       onFoodSpawned: (foods) => {
