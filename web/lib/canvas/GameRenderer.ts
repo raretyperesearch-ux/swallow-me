@@ -312,11 +312,20 @@ export class GameRenderer {
   // Food count tracking (for eat sound)
   private lastFoodCount: number = -1;
 
-  // FPS counter
+  // Frame timing (dt-based movement)
   private lastFrameTime: number = 0;
+  private dt: number = 1 / 60; // seconds, capped
   private fps: number = 0;
   private fpsFrames: number = 0;
   private fpsLastUpdate: number = 0;
+
+  // Screen shake
+  private shakeX: number = 0;
+  private shakeY: number = 0;
+  private shakeLife: number = 0; // seconds remaining
+
+  // Low-end device detection
+  private isLowEnd: boolean = false;
 
   // Viewport reporting
   private lastViewportSend: number = 0;
@@ -378,8 +387,9 @@ export class GameRenderer {
       navigator.maxTouchPoints > 0 ||
       "ontouchstart" in window;
 
-    // Cap mobile to ~30fps
-    if (this.isMobile) {
+    // Only cap truly low-end devices (≤2 cores) to 30fps
+    this.isLowEnd = (navigator.hardwareConcurrency || 4) <= 2;
+    if (this.isLowEnd) {
       this.targetFrameInterval = 1000 / 30;
     }
 
@@ -395,9 +405,12 @@ export class GameRenderer {
     this.setupInput();
 
     // Pre-render food glow circles (one per color, cached forever)
+    // Mobile gets smaller glow radius for perf, desktop gets full size
+    const glowRadiusSmall = this.isMobile ? 8 : 16;
+    const glowRadiusLarge = this.isMobile ? 14 : 24;
     for (const color of FOOD_COLORS) {
-      this.foodGlowSmall.push(createGlowCircle(16, color));   // glow for normal food
-      this.foodGlowLarge.push(createGlowCircle(24, color));   // glow for death food
+      this.foodGlowSmall.push(createGlowCircle(glowRadiusSmall, color));
+      this.foodGlowLarge.push(createGlowCircle(glowRadiusLarge, color));
     }
 
     this.preloadAssets().then(() => {
@@ -578,7 +591,9 @@ export class GameRenderer {
 
   private spawnDeathParticles(worldX: number, worldY: number, skinId: number) {
     const color = SNAKE_COLORS[skinId % SNAKE_COLORS.length];
-    this.emitPool(this.deathPool, worldX, worldY, 30, color, 5, 1.2, 3, 8);
+    this.emitPool(this.deathPool, worldX, worldY, 50, color, 6, 1.5, 4, 12);
+    // Screen shake on death
+    this.shakeLife = 0.2;
   }
 
   private updatePool(pool: PooledParticle[], friction: number, lifeDrain: number) {
@@ -618,6 +633,14 @@ export class GameRenderer {
     const tail = snake.segments[snake.segments.length - 1];
     const color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
     this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 8, tail.y + (Math.random() - 0.5) * 8, 1, color, 2, 0.8, 2, 5);
+  }
+
+  // Whoosh trail: wider, brighter particles during boost
+  private spawnBoostParticleLarge(snake: LocalSnake) {
+    if (snake.segments.length < 3) return;
+    const tail = snake.segments[snake.segments.length - 1];
+    const color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
+    this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 14, tail.y + (Math.random() - 0.5) * 14, 1, color, 3, 1.0, 3, 8);
   }
 
   // ─── Eat Popups (object pool) ──────────────────────
@@ -985,18 +1008,22 @@ export class GameRenderer {
       this.lastRenderTime = now;
     }
 
+    // Compute delta time in seconds, capped to prevent spiral of death
+    const rawDt = (now - this.lastFrameTime) / 1000;
+    this.dt = Math.min(rawDt, 1 / 15); // cap at ~15fps worth of dt
+    this.lastFrameTime = now;
+
     this.fpsFrames++;
     if (now - this.fpsLastUpdate > 1000) {
       this.fps = this.fpsFrames;
       this.fpsFrames = 0;
       this.fpsLastUpdate = now;
     }
-    this.lastFrameTime = now;
 
     if (!this.ready) {
       this.drawLoadingScreen();
     } else {
-      this.update();
+      this.update(this.dt);
       this.draw();
       // Draw touch controls on main canvas AFTER all game rendering (screen coords)
       if (this.isTouchDevice) {
@@ -1087,10 +1114,18 @@ export class GameRenderer {
            sy > -margin && sy < this.cssH + margin;
   }
 
-  private update() {
-    // inputAngle is already set by mouse/touch event handlers — no recalculation needed
+  private update(dt: number) {
+    // dt = seconds since last frame (capped in loop)
 
     this.boostFrameCounter++;
+
+    // Exponential smoothing factors — frame-rate independent
+    // turnRate: ~8 rad/sec → at 60fps=0.13/frame, at 30fps=0.27/frame
+    const turnLerp = 1 - Math.exp(-8 * dt);
+    // Server position blend: converge in ~6 frames at 60fps
+    const serverBlend = 1 - Math.pow(0.001, dt);
+    // Other player lerp: faster convergence
+    const otherBlend = 1 - Math.pow(0.0001, dt);
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
@@ -1098,41 +1133,48 @@ export class GameRenderer {
 
       // --- CLIENT-SIDE PREDICTION ---
       if (isMe) {
-        // Smooth angle toward mouse target
+        // Smooth angle toward mouse target (dt-based)
         let angleDiff = this.inputAngle - snake.angle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * 0.15; // smooth turning
+        snake.angle += angleDiff * turnLerp;
 
-        // Move head locally at predicted speed
+        // Move head locally at predicted speed (dt-based)
         const speed = snake.boosting ? 16.0 : 8.0;
-        snake.headX += Math.cos(snake.angle) * speed;
-        snake.headY += Math.sin(snake.angle) * speed;
+        const moveDist = speed * dt * 60; // normalize to 60fps baseline
+        snake.headX += Math.cos(snake.angle) * moveDist;
+        snake.headY += Math.sin(snake.angle) * moveDist;
 
-        // Blend toward server position to prevent drift
-        snake.headX += (snake.serverHeadX - snake.headX) * 0.1;
-        snake.headY += (snake.serverHeadY - snake.headY) * 0.1;
+        // Blend toward server position (exponential smoothing, dt-based)
+        snake.headX += (snake.serverHeadX - snake.headX) * serverBlend;
+        snake.headY += (snake.serverHeadY - snake.headY) * serverBlend;
 
         // Boost sound
         if (snake.boosting && !this.wasBoosting) this.audio.startBoost();
         if (!snake.boosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = snake.boosting;
 
-        // Spawn boost particles every 3 frames
-        if (snake.boosting && this.boostFrameCounter % 3 === 0) {
-          this.spawnBoostParticle(snake);
+        // Boost particles: when boosting, emit more (whoosh trail)
+        if (snake.boosting) {
+          if (this.boostFrameCounter % 2 === 0) {
+            this.spawnBoostParticle(snake);
+            // Extra whoosh: 1.5x size particles
+            this.spawnBoostParticleLarge(snake);
+          }
+        } else if (this.boostFrameCounter % 3 === 0) {
+          // Normal non-boost: no particles
         }
       } else {
-        // Other players: lerp toward server position
-        snake.headX += (snake.serverHeadX - snake.headX) * 0.2;
-        snake.headY += (snake.serverHeadY - snake.headY) * 0.2;
+        // Other players: lerp toward server position (dt-based)
+        snake.headX += (snake.serverHeadX - snake.headX) * otherBlend;
+        snake.headY += (snake.serverHeadY - snake.headY) * otherBlend;
 
-        // Smooth angle for others
+        // Smooth angle for others (dt-based)
         const targetAngle = snake.serverAngle;
         let angleDiff = targetAngle - snake.angle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * 0.15;
+        snake.angle += angleDiff * turnLerp;
 
         // Boost particles for others too (visible)
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
@@ -1141,7 +1183,6 @@ export class GameRenderer {
       }
 
       // --- CHAIN CONSTRAINT (no gaps) ---
-      // Head is segment 0
       if (snake.segments.length > 0) {
         snake.segments[0].x = snake.headX;
         snake.segments[0].y = snake.headY;
@@ -1155,7 +1196,6 @@ export class GameRenderer {
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         if (dist > SEGMENT_SPACING) {
-          // HARD constraint — segment is EXACTLY spacing distance behind previous
           const angle = Math.atan2(dy, dx);
           curr.x = prev.x + Math.cos(angle) * SEGMENT_SPACING;
           curr.y = prev.y + Math.sin(angle) * SEGMENT_SPACING;
@@ -1173,30 +1213,42 @@ export class GameRenderer {
       }
     }
 
-    // Update particle pools (zero allocation)
-    this.updatePool(this.deathPool, 0.96, 1 / 60);
-    this.updatePool(this.boostPool, 0.94, 1 / 30);
-    this.updatePool(this.trailPool, 0.98, 1 / 20);
+    // Update particle pools (dt-normalized drain rates)
+    this.updatePool(this.deathPool, Math.pow(0.04, dt), dt);
+    this.updatePool(this.boostPool, Math.pow(0.06, dt), dt * 1.5);
+    this.updatePool(this.trailPool, Math.pow(0.02, dt), dt * 2);
     this.updateEatPopups();
 
-    // Camera — smooth follow + dynamic zoom
+    // Screen shake decay
+    if (this.shakeLife > 0) {
+      this.shakeLife -= dt;
+      const intensity = Math.max(0, this.shakeLife / 0.2) * 5;
+      this.shakeX = (Math.random() - 0.5) * 2 * intensity;
+      this.shakeY = (Math.random() - 0.5) * 2 * intensity;
+    } else {
+      this.shakeX = 0;
+      this.shakeY = 0;
+    }
+
+    // Camera — smooth follow + dynamic zoom (dt-based)
+    const camLerp = 1 - Math.pow(0.0001, dt);
     const me = this.localSnakes.get(this.mySessionId);
     if (me && me.alive) {
-      this.camX += (me.headX - this.camX) * 0.1;
-      this.camY += (me.headY - this.camY) * 0.1;
+      this.camX += (me.headX - this.camX) * camLerp + this.shakeX;
+      this.camY += (me.headY - this.camY) * camLerp + this.shakeY;
 
       // Zoom out as snake grows: length 40→1.0, length 200→0.7, length 500→0.5
       const len = me.serverLength || 40;
       this.targetZoom = Math.max(0.5, Math.min(1.0, 1.0 - (len - 40) / 900));
-      this.zoom += (this.targetZoom - this.zoom) * 0.03;
+      this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
 
-      // Trail: spawn behind head with additive blending
-      if (this.boostFrameCounter % 2 === 0) {
-        const trailColor = SNAKE_COLORS[me.skinId % SNAKE_COLORS.length];
-        const seg1 = me.segments[1];
-        if (seg1) {
-          this.emitPool(this.trailPool, seg1.x, seg1.y, 1, trailColor, 0.3, 0.5, 4, 8);
-        }
+      // Trail: spawn every frame, bigger on mobile
+      const trailColor = SNAKE_COLORS[me.skinId % SNAKE_COLORS.length];
+      const seg1 = me.segments[1];
+      if (seg1) {
+        const trailSizeMin = this.isMobile ? 6 : 4;
+        const trailSizeMax = this.isMobile ? 12 : 8;
+        this.emitPool(this.trailPool, seg1.x, seg1.y, 1, trailColor, 0.3, 0.5, trailSizeMin, trailSizeMax);
       }
 
       // Track max length for boost energy arc
@@ -1279,7 +1331,7 @@ export class GameRenderer {
 
   private drawGrid(ctx: CanvasRenderingContext2D, W: number, H: number) {
     const gridSize = 80;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.strokeStyle = this.isMobile ? "rgba(255, 255, 255, 0.07)" : "rgba(255, 255, 255, 0.04)";
     ctx.lineWidth = 1;
     ctx.beginPath();
 
@@ -1468,7 +1520,8 @@ export class GameRenderer {
     const time = Date.now();
     // On mobile, only render food within tight margin for performance
     const foodViewMargin = this.isMobile ? -100 : 50;
-    const drawGlow = !this.isMobile && this.foodGlowSmall.length > 0;
+    const drawGlow = this.foodGlowSmall.length > 0;
+    const glowAlpha = this.isMobile ? 0.2 : 0.35;
 
     // Reset pre-allocated batch counts (zero allocation)
     for (let i = 0; i < FOOD_COLORS.length; i++) this.foodBatchCounts[i] = 0;
@@ -1490,7 +1543,7 @@ export class GameRenderer {
         const glowImg = isDeath ? this.foodGlowLarge[colorIdx] : this.foodGlowSmall[colorIdx];
         if (glowImg) {
           const glowSize = r * 4;
-          ctx.globalAlpha = 0.35;
+          ctx.globalAlpha = glowAlpha;
           ctx.drawImage(glowImg, sx - glowSize / 2, sy - glowSize / 2, glowSize, glowSize);
         }
       }
