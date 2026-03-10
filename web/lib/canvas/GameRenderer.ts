@@ -1259,10 +1259,10 @@ export class GameRenderer {
 
     // Exponential smoothing factors — frame-rate independent
     const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
-    const otherTurnLerp = 0.25; // Other players: responsive, not laggy
-    // Server position blend: strong pull so client stays within ~15 units of server
+    const otherTurnLerp = 0.4; // Other players/bots: snap hard to server angle
+    // Server position blend
     const serverBlend = 0.3;  // local player: 30% blend per frame toward server
-    const otherBlend = 0.4;   // other players: 40% blend per frame (tighter)
+    const otherBlend = 0.5;   // other players/bots: 50% blend — accuracy > smoothness
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
@@ -1317,6 +1317,14 @@ export class GameRenderer {
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
           this.spawnBoostParticle(snake);
         }
+      }
+
+      // Max drift cap: snap if client is >30 units from server truth
+      const driftX = snake.serverHeadX - snake.headX;
+      const driftY = snake.serverHeadY - snake.headY;
+      if (driftX * driftX + driftY * driftY > 900) { // 30^2 = 900
+        snake.headX = snake.serverHeadX;
+        snake.headY = snake.serverHeadY;
       }
 
       // --- CHAIN CONSTRAINT (no gaps) ---

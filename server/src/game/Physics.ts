@@ -138,7 +138,7 @@ export function checkSnakeCollisions(
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
       const otherBodyRadius = getBodyRadius(other.length);
-      const killDist = headRadius + otherBodyRadius;
+      const killDist = (headRadius + otherBodyRadius) * 1.15;
       const killDistSq = killDist * killDist;
 
       for (let i = 1; i < other.segments.length; i++) {
