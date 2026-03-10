@@ -7,6 +7,7 @@ export enum BotPersonality {
   PASSIVE = "passive",
   HUNTER = "hunter",
   RANDOM = "random",
+  COWARD = "coward",
 }
 
 const BOT_NAMES = [
@@ -111,7 +112,7 @@ export function updateBotInput(
         if (nearestPrey) {
           state.targetX = nearestPrey.headX;
           state.targetY = nearestPrey.headY;
-          boost = nearestPreyDist < 200;
+          boost = nearestPreyDist < 300;
         } else {
           // Wander toward food
           setFoodTarget(state, bot, allFood);
@@ -124,7 +125,7 @@ export function updateBotInput(
         break;
 
       case BotPersonality.HUNTER:
-        // Circle around larger snakes waiting for mistakes
+        // Cut off targets by predicting where they're heading
         let target: ServerSnake | null = null;
         let targetDist = Infinity;
         for (const [id, other] of allSnakes) {
@@ -138,13 +139,13 @@ export function updateBotInput(
           }
         }
         if (target && targetDist < 400) {
-          // Circle the target
-          const angleToTarget = Math.atan2(
-            target.headY - bot.headY,
-            target.headX - bot.headX
-          );
-          state.targetX = target.headX + Math.cos(angleToTarget + Math.PI / 2) * 150;
-          state.targetY = target.headY + Math.sin(angleToTarget + Math.PI / 2) * 150;
+          // Predict where target is heading (lead the target)
+          const leadDist = Math.min(200, targetDist * 0.6);
+          const predictX = target.headX + Math.cos(target.angle) * leadDist;
+          const predictY = target.headY + Math.sin(target.angle) * leadDist;
+          state.targetX = predictX;
+          state.targetY = predictY;
+          boost = targetDist < 250 && bot.length > 20;
         } else {
           setFoodTarget(state, bot, allFood);
         }
@@ -158,6 +159,35 @@ export function updateBotInput(
           const wanderAngle = bot.angle + (Math.random() - 0.5) * 1.5;
           state.targetX = bot.headX + Math.cos(wanderAngle) * 300;
           state.targetY = bot.headY + Math.sin(wanderAngle) * 300;
+        }
+        break;
+
+      case BotPersonality.COWARD:
+        // Avoid all other snakes, hug edges for food, flee aggressively
+        let nearestThreat: ServerSnake | null = null;
+        let nearestThreatDist = Infinity;
+        for (const [id, other] of allSnakes) {
+          if (id === bot.id || !other.alive) continue;
+          const dx = other.headX - bot.headX;
+          const dy = other.headY - bot.headY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < nearestThreatDist && dist < 400) {
+            nearestThreatDist = dist;
+            nearestThreat = other;
+          }
+        }
+        if (nearestThreat && nearestThreatDist < 300) {
+          // Flee away from threat
+          const fleeAngle = Math.atan2(
+            bot.headY - nearestThreat.headY,
+            bot.headX - nearestThreat.headX
+          );
+          state.targetX = bot.headX + Math.cos(fleeAngle) * 400;
+          state.targetY = bot.headY + Math.sin(fleeAngle) * 400;
+          boost = nearestThreatDist < 150;
+        } else {
+          // Safe — collect food in less contested areas (toward edge)
+          setFoodTarget(state, bot, allFood);
         }
         break;
     }

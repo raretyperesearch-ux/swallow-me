@@ -16,6 +16,7 @@ export default function PlayPage() {
   const [phase, setPhase] = useState<GamePhase>("lobby");
   const [room, setRoom] = useState<Colyseus.Room | null>(null);
   const [selectedTier, setSelectedTier] = useState<number>(1);
+  const [playerName, setPlayerName] = useState<string>("");
   const [deathData, setDeathData] = useState<any>(null);
   const [cashoutData, setCashoutData] = useState<any>(null);
   const [connecting, setConnecting] = useState(false);
@@ -26,7 +27,8 @@ export default function PlayPage() {
       // TODO: Wire in Privy wallet connect + USDC escrow
       // For Phase 1, just connect to Colyseus with a fake wallet
       const wallet = "test_" + Math.random().toString(36).slice(2, 8);
-      const name = "player_" + Math.random().toString(36).slice(2, 6);
+      const coolNames = ["venom_king", "noodle_ninja", "snek_lord", "coil_master", "slither_pro", "fang_fury", "scale_boss", "bite_force"];
+      const name = playerName.trim() || coolNames[Math.floor(Math.random() * coolNames.length)];
 
       const r = await joinRoom(selectedTier, wallet, name);
       setRoom(r);
@@ -80,6 +82,15 @@ export default function PlayPage() {
             </button>
           ))}
         </div>
+
+        <input
+          type="text"
+          value={playerName}
+          onChange={(e) => setPlayerName(e.target.value.slice(0, 16))}
+          placeholder="Enter your name..."
+          maxLength={16}
+          className="mb-6 w-64 bg-gray-800/80 border border-gray-700 rounded-lg px-4 py-3 text-center text-white placeholder-gray-500 focus:outline-none focus:border-green-400 transition-colors"
+        />
 
         <button
           onClick={handleJoin}

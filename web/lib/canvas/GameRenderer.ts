@@ -68,6 +68,20 @@ const SNAKE_COLORS: string[] = [
   "#FFDD00",  // yellow
 ];
 
+// Skin patterns: primary + secondary color, alternating every 3 segments
+const SKIN_PATTERNS: { primary: string; secondary: string }[] = [
+  { primary: "#4488FF", secondary: "#2244AA" },
+  { primary: "#FF4466", secondary: "#AA2244" },
+  { primary: "#44FF66", secondary: "#22AA44" },
+  { primary: "#FFAA00", secondary: "#CC7700" },
+  { primary: "#FF44FF", secondary: "#AA22AA" },
+  { primary: "#00DDDD", secondary: "#008899" },
+  { primary: "#FF6600", secondary: "#CC4400" },
+  { primary: "#AA44FF", secondary: "#7722CC" },
+  { primary: "#00FF44", secondary: "#00AA22" },
+  { primary: "#FFDD00", secondary: "#CCAA00" },
+];
+
 function darkenColor(hex: string, factor: number): string {
   const r = Math.max(0, Math.floor(parseInt(hex.slice(1, 3), 16) * (1 - factor)));
   const g = Math.max(0, Math.floor(parseInt(hex.slice(3, 5), 16) * (1 - factor)));
@@ -149,7 +163,15 @@ class GameAudio {
   toggleMute() {
     this._muted = !this._muted;
     if (this._muted) this.stopBoost();
+    try { localStorage.setItem("swallowme_muted", this._muted ? "1" : "0"); } catch {}
     return this._muted;
+  }
+
+  loadMuteState() {
+    try {
+      const val = localStorage.getItem("swallowme_muted");
+      if (val === "1") { this._muted = true; }
+    } catch {}
   }
 
   playEat() {
@@ -382,6 +404,14 @@ export class GameRenderer {
   private deathCamX: number = 0;
   private deathCamY: number = 0;
 
+  // Kill announcement (big centered text)
+  private killAnnouncementText: string = "";
+  private killAnnouncementTimer: number = 0;
+
+  // Leaderboard cache (updated every 500ms)
+  private leaderboardCache: { name: string; length: number; isMe: boolean }[] = [];
+  private lastLeaderboardUpdate: number = 0;
+
   // Callbacks
   public onDeath?: (data: any) => void;
   public onCashout?: (data: any) => void;
@@ -421,6 +451,9 @@ export class GameRenderer {
       this.foodGlowSmall.push(createGlowCircle(glowRadiusSmall, color));
       this.foodGlowLarge.push(createGlowCircle(glowRadiusLarge, color));
     }
+
+    // Load persisted mute state
+    this.audio.loadMuteState();
 
     // Pre-render hex tile pattern for background
     this.initHexPattern();
@@ -550,6 +583,9 @@ export class GameRenderer {
       if (me && entry.killerName === me.name) {
         this.audio.playKill();
         this.shakeLife = 0.2;
+        // Big centered kill announcement
+        this.killAnnouncementText = `ATE ${entry.victimName.toUpperCase()}`;
+        this.killAnnouncementTimer = 2.0;
       }
       const maxFeed = this.isMobile ? 3 : 5;
       while (this.killFeed.length > maxFeed) this.killFeed.shift();
@@ -581,7 +617,7 @@ export class GameRenderer {
       // Spawn full-body explosion along all segments
       const me = this.localSnakes.get(this.mySessionId);
       if (me && me.segments.length > 0) {
-        const color = SNAKE_COLORS[me.skinId % SNAKE_COLORS.length];
+        const color = SKIN_PATTERNS[me.skinId % SKIN_PATTERNS.length].primary;
         // Emit 2-3 particles per segment along the entire body
         const step = Math.max(1, Math.floor(me.segments.length / 400)); // cap total particles
         for (let i = 0; i < me.segments.length; i += step) {
@@ -624,7 +660,7 @@ export class GameRenderer {
   }
 
   private spawnDeathParticles(worldX: number, worldY: number, skinId: number, shakeScreen: boolean) {
-    const color = SNAKE_COLORS[skinId % SNAKE_COLORS.length];
+    const color = SKIN_PATTERNS[skinId % SKIN_PATTERNS.length].primary;
     this.emitPool(this.deathPool, worldX, worldY, 50, color, 6, 1.5, 4, 12);
     if (shakeScreen) {
       this.shakeLife = 0.2;
@@ -666,7 +702,7 @@ export class GameRenderer {
   private spawnBoostParticle(snake: LocalSnake) {
     if (snake.segments.length < 3) return;
     const tail = snake.segments[snake.segments.length - 1];
-    const color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
+    const color = SKIN_PATTERNS[snake.skinId % SKIN_PATTERNS.length].primary;
     this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 8, tail.y + (Math.random() - 0.5) * 8, 1, color, 2, 0.8, 2, 5);
   }
 
@@ -674,7 +710,7 @@ export class GameRenderer {
   private spawnBoostParticleLarge(snake: LocalSnake) {
     if (snake.segments.length < 3) return;
     const tail = snake.segments[snake.segments.length - 1];
-    const color = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
+    const color = SKIN_PATTERNS[snake.skinId % SKIN_PATTERNS.length].primary;
     this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 14, tail.y + (Math.random() - 0.5) * 14, 1, color, 3, 1.0, 3, 8);
   }
 
@@ -1301,6 +1337,18 @@ export class GameRenderer {
       }
     }
 
+    // Kill announcement decay
+    if (this.killAnnouncementTimer > 0) {
+      this.killAnnouncementTimer -= dt;
+    }
+
+    // Leaderboard update (every 500ms)
+    const now3 = performance.now();
+    if (now3 - this.lastLeaderboardUpdate > 500) {
+      this.lastLeaderboardUpdate = now3;
+      this.updateLeaderboard();
+    }
+
     // Camera — smooth follow + dynamic zoom (dt-based)
     const camLerp = 1 - Math.pow(0.0001, dt);
     const me = this.localSnakes.get(this.mySessionId);
@@ -1318,7 +1366,7 @@ export class GameRenderer {
       this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
 
       // Trail: spawn every frame, bigger on mobile
-      const trailColor = SNAKE_COLORS[me.skinId % SNAKE_COLORS.length];
+      const trailColor = SKIN_PATTERNS[me.skinId % SKIN_PATTERNS.length].primary;
       const seg1 = me.segments[1];
       if (seg1) {
         const trailSizeMin = this.isMobile ? 6 : 4;
@@ -1396,6 +1444,8 @@ export class GameRenderer {
     // HUD elements (screen-space, not affected by zoom)
     this.drawKillFeed(ctx, W, H);
     this.drawMinimap(ctx, W, H);
+    this.drawLeaderboard(ctx, W, H);
+    this.drawKillAnnouncement(ctx, W, H);
   }
 
   // ─── Hexagon Background Pattern ─────────────────
@@ -1496,10 +1546,11 @@ export class GameRenderer {
     if (!snake.alive || snake.segments.length < 2) return;
 
     const bodyRadius = (8 + Math.log2(Math.max(40, snake.serverLength)) * 2.5) * this.zoom;
-    const snakeColor = SNAKE_COLORS[snake.skinId % SNAKE_COLORS.length];
+    const skinIdx = snake.skinId % SKIN_PATTERNS.length;
+    const skin = SKIN_PATTERNS[skinIdx];
+    const snakeColor = skin.primary;
+    const secondaryColor = skin.secondary;
     const outlineColor = darkenColor(snakeColor, 0.4);
-    const highlightColor = lightenColor(snakeColor, 0.2);
-    const shadowColor = darkenColor(snakeColor, 0.15);
 
     ctx.globalAlpha = 1.0;
     const segCount = snake.segments.length;
@@ -1517,10 +1568,26 @@ export class GameRenderer {
     }
     ctx.fill();
 
-    // --- PASS 2: Solid base color (continuous smooth tube) ---
+    // --- PASS 2: Patterned body (primary/secondary alternating every 3 segments) ---
+    // Batch primary segments
     ctx.fillStyle = snakeColor;
     ctx.beginPath();
     for (let i = segCount - 1; i >= 0; i--) {
+      if (Math.floor(i / 3) % 2 !== 0) continue;
+      const seg = snake.segments[i];
+      if (!this.isInView(seg.x, seg.y, 200)) continue;
+      const sx = this.toScreenX(seg.x);
+      const sy = this.toScreenY(seg.y);
+      ctx.moveTo(sx + bodyRadius, sy);
+      ctx.arc(sx, sy, bodyRadius, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    // Batch secondary segments
+    ctx.fillStyle = secondaryColor;
+    ctx.beginPath();
+    for (let i = segCount - 1; i >= 0; i--) {
+      if (Math.floor(i / 3) % 2 === 0) continue;
       const seg = snake.segments[i];
       if (!this.isInView(seg.x, seg.y, 200)) continue;
       const sx = this.toScreenX(seg.x);
@@ -1814,6 +1881,99 @@ export class GameRenderer {
       }
     }
 
+    ctx.restore();
+  }
+
+  // ─── Leaderboard ────────────────────────────────────
+
+  private updateLeaderboard() {
+    const entries: { name: string; length: number; isMe: boolean }[] = [];
+    for (const [id, snake] of this.localSnakes) {
+      if (!snake.alive) continue;
+      entries.push({ name: snake.name, length: snake.serverLength, isMe: id === this.mySessionId });
+    }
+    entries.sort((a, b) => b.length - a.length);
+    this.leaderboardCache = entries.slice(0, 5);
+  }
+
+  private drawLeaderboard(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.leaderboardCache.length === 0) return;
+
+    const fontSize = this.isMobile ? 10 : 13;
+    const lineH = this.isMobile ? 18 : 24;
+    const padding = this.isMobile ? 6 : 10;
+    const panelW = this.isMobile ? 110 : 160;
+    const headerH = lineH + 2;
+    const panelH = headerH + this.leaderboardCache.length * lineH + padding;
+    const px = padding;
+    const py = this.isMobile ? 50 : 70;
+
+    // Panel background
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.roundRect(px, py, panelW, panelH, 8);
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+
+    // Header
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#888888";
+    ctx.fillText("TOP SNAKES", px + padding, py + fontSize + 4);
+
+    // Entries
+    ctx.font = `${fontSize}px Arial, sans-serif`;
+    for (let i = 0; i < this.leaderboardCache.length; i++) {
+      const entry = this.leaderboardCache[i];
+      const ey = py + headerH + i * lineH + fontSize;
+
+      // Rank
+      ctx.fillStyle = entry.isMe ? "#00FF66" : "#cccccc";
+      const rank = `${i + 1}. `;
+      ctx.fillText(rank, px + padding, ey);
+      const rankW = ctx.measureText(rank).width;
+
+      // Name (truncated)
+      const maxNameW = panelW - padding * 2 - rankW - 30;
+      let name = entry.name;
+      while (ctx.measureText(name).width > maxNameW && name.length > 3) {
+        name = name.slice(0, -1);
+      }
+      ctx.fillText(name, px + padding + rankW, ey);
+
+      // Length
+      ctx.textAlign = "right";
+      ctx.fillStyle = entry.isMe ? "#00FF66" : "#999999";
+      ctx.fillText(`${entry.length}`, px + panelW - padding, ey);
+      ctx.textAlign = "left";
+    }
+  }
+
+  // ─── Kill Announcement (big center text) ───────────
+
+  private drawKillAnnouncement(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.killAnnouncementTimer <= 0) return;
+
+    const alpha = Math.min(1, this.killAnnouncementTimer / 0.5); // fade out in last 0.5s
+    const scale = 1 + (1 - Math.min(1, this.killAnnouncementTimer / 1.8)) * 0.15; // slight grow
+    const fontSize = this.isMobile ? 28 : 42;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `bold ${Math.round(fontSize * scale)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // Shadow
+    ctx.fillStyle = "#000000";
+    ctx.fillText(this.killAnnouncementText, W / 2 + 2, H * 0.35 + 2);
+
+    // Main text (red)
+    ctx.fillStyle = "#FF4444";
+    ctx.fillText(this.killAnnouncementText, W / 2, H * 0.35);
+
+    ctx.textBaseline = "alphabetic";
     ctx.restore();
   }
 
