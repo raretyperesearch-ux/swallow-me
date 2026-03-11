@@ -134,7 +134,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
 
     this.serverSnakes.delete(client.sessionId);
-    this.state.snakes.delete(client.sessionId);
+    if (this.state.snakes.has(client.sessionId)) {
+      this.state.snakes.delete(client.sessionId);
+    }
     this.clientViewports.delete(client.sessionId);
     this.updateCounts();
   }
@@ -243,7 +245,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
 
     // Remove dead snake from synced state
-    this.state.snakes.delete(event.victim);
+    if (this.state.snakes.has(event.victim)) {
+      this.state.snakes.delete(event.victim);
+    }
 
     // Death food is now synced via onFoodSpawned callback — no full sync needed
 
@@ -274,7 +278,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
 
     snake.alive = false;
     this.serverSnakes.delete(client.sessionId);
-    this.state.snakes.delete(client.sessionId);
+    if (this.state.snakes.has(client.sessionId)) {
+      this.state.snakes.delete(client.sessionId);
+    }
     this.updateCounts();
 
     client.send("cashout_success", {
@@ -307,7 +313,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         if (snake.isBot && snake.alive && Math.random() < 0.3) {
           snake.alive = false;
           this.serverSnakes.delete(id);
-          this.state.snakes.delete(id);
+          if (this.state.snakes.has(id)) {
+            this.state.snakes.delete(id);
+          }
           removeBotState(id);
           break;
         }
@@ -421,11 +429,15 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
 
     // Remove snakes that are dead or no longer visible to any client
+    const toRemove: string[] = [];
     for (const [id] of this.state.snakes) {
       const server = this.serverSnakes.get(id);
       if (!server || !server.alive || !visibleSnakeIds.has(id)) {
-        this.state.snakes.delete(id);
+        toRemove.push(id);
       }
+    }
+    for (const id of toRemove) {
+      this.state.snakes.delete(id);
     }
   }
 

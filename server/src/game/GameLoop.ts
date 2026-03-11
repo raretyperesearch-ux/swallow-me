@@ -57,13 +57,20 @@ export function runGameTick(
     }
   }
 
-  // 3. Check collisions — run TWICE to catch edge cases where first pass
-  //    marks a snake dead that was blocking detection of another collision
-  const snakeKills1 = checkSnakeCollisions(snakes);
+  // 3. Check collisions (single pass + containment + boundary)
+  const snakeKills = checkSnakeCollisions(snakes);
   const containmentKills = checkContainmentKills(snakes);
-  const snakeKills2 = checkSnakeCollisions(snakes); // second pass catches stragglers
   const boundaryKills = checkBoundaryCollisions(snakes, arenaRadius);
-  const allKills = [...snakeKills1, ...containmentKills, ...snakeKills2, ...boundaryKills];
+
+  // Deduplicate kills by victim ID — prevent double-kill events
+  const seenVictims = new Set<string>();
+  const allKills: KillEvent[] = [];
+  for (const kill of [...snakeKills, ...containmentKills, ...boundaryKills]) {
+    if (!seenVictims.has(kill.victim)) {
+      seenVictims.add(kill.victim);
+      allKills.push(kill);
+    }
+  }
 
   // 4. Process kills
   for (const kill of allKills) {

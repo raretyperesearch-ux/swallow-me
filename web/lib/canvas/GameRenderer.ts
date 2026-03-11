@@ -1286,9 +1286,10 @@ export class GameRenderer {
         snake.headX += Math.cos(snake.angle) * moveDist;
         snake.headY += Math.sin(snake.angle) * moveDist;
 
-        // Blend toward server position (exponential smoothing, dt-based)
-        snake.headX += (snake.serverHeadX - snake.headX) * serverBlend;
-        snake.headY += (snake.serverHeadY - snake.headY) * serverBlend;
+        // Blend toward server — SOFTER during boost to prevent lunge stutter
+        const blendFactor = isBoosting ? 0.08 : 0.25;
+        snake.headX += (snake.serverHeadX - snake.headX) * blendFactor;
+        snake.headY += (snake.serverHeadY - snake.headY) * blendFactor;
 
         // Boost sound — uses local input for instant response
         if (isBoosting && !this.wasBoosting) this.audio.startBoost();

@@ -28,11 +28,11 @@ export const GAME_CONFIG = {
   TURN_RADIUS_SCALE: 0.15, // Additional radius per length unit
 
   // Food
-  INITIAL_FOOD_COUNT: 500, // Food orbs at game start
-  MAX_FOOD: 1000, // Cap on total food
+  INITIAL_FOOD_COUNT: 800, // Food orbs at game start
+  MAX_FOOD: 1500, // Cap on total food
   FOOD_VALUE: 0.25, // Length gained per food eaten
   DEATH_FOOD_COUNT: 15, // Food orbs dropped on death
-  FOOD_SPAWN_RATE: 2, // New food per tick when below minimum
+  FOOD_SPAWN_RATE: 4, // New food per tick when below minimum
 
   // Lobby
   MIN_PLAYERS_TO_START: 3, // Real + bots needed
