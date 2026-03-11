@@ -20,8 +20,8 @@ export interface JoystickConfig {
 const DEFAULT_CONFIG: JoystickConfig = {
   activationDeadZone: 0.18,
   directionalDeadZone: 0.05,
-  smoothK: 18,
-  decayMs: 100,
+  smoothK: 24,
+  decayMs: 60,
   outerRadius: 70,
   knobRadius: 28,
   hitbox: 150,

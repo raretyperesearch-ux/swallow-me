@@ -30,16 +30,16 @@ export interface SnakeMotionState {
 
 export interface SteeringConfig {
   dtCap: number;        // 0.05
-  deadZonePx: number;   // 24
-  turnRateSlow: number; // 4.5 rad/s
-  turnRateFast: number; // 2.2 rad/s
+  deadZonePx: number;   // 14
+  turnRateSlow: number; // 5.8 rad/s
+  turnRateFast: number; // 3.2 rad/s
 }
 
 export const DEFAULT_STEERING: SteeringConfig = {
   dtCap: 0.05,
-  deadZonePx: 24,
-  turnRateSlow: 4.5,
-  turnRateFast: 2.2,
+  deadZonePx: 14,
+  turnRateSlow: 5.8,
+  turnRateFast: 3.2,
 };
 
 export function updateHeadingFromTarget(
@@ -66,8 +66,8 @@ export function updateHeadingFromTarget(
   );
   let maxTurnRate = lerp(cfg.turnRateSlow, cfg.turnRateFast, speedT);
 
-  // Large angle delta (>90°): boost turn rate 1.5x for fast 360s
-  if (Math.abs(delta) > Math.PI / 2) maxTurnRate *= 1.5;
+  // Large angle delta (>90°): boost turn rate 1.8x for fast 360s
+  if (Math.abs(delta) > Math.PI / 2) maxTurnRate *= 1.8;
 
   const maxStep = maxTurnRate * dt;
   const step = clamp(delta, -maxStep, +maxStep);

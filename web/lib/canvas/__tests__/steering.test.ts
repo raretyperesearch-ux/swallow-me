@@ -70,14 +70,14 @@ describe("angleDiff", () => {
 describe("updateHeadingFromTarget", () => {
   const cfg: SteeringConfig = {
     dtCap: 0.05,
-    deadZonePx: 24,
-    turnRateSlow: 4.5,
-    turnRateFast: 2.2,
+    deadZonePx: 14,
+    turnRateSlow: 5.8,
+    turnRateFast: 3.2,
   };
 
   it("does not turn inside dead zone", () => {
     const s: SnakeMotionState = { heading: 0, speed: 240, minSpeed: 240, maxSpeed: 480 };
-    updateHeadingFromTarget(s, 100, 100, 110, 110, 1 / 60, cfg); // ~14px away
+    updateHeadingFromTarget(s, 100, 100, 107, 107, 1 / 60, cfg); // ~10px away
     expect(s.heading).toBe(0);
   });
 
@@ -89,9 +89,10 @@ describe("updateHeadingFromTarget", () => {
 
   it("clamps turn to maxTurnRate * dt", () => {
     const s: SnakeMotionState = { heading: 0, speed: 240, minSpeed: 240, maxSpeed: 480 };
-    // At min speed, turnRate = 4.5 rad/s. At dt=1/60, maxStep = 0.075
+    // At min speed, turnRate = 5.8 rad/s. At dt=1/60, maxStep ≈ 0.0967
+    // Target at PI/2 (exactly 90°) — sharp-turn multiplier does NOT apply (>PI/2 only)
     updateHeadingFromTarget(s, 0, 0, 0, 100, 1 / 60, cfg);
-    expect(s.heading).toBeLessThanOrEqual(0.075 + 0.001);
+    expect(s.heading).toBeLessThanOrEqual(0.0967 + 0.001);
   });
 
   it("turn rate is slower at higher speed", () => {
@@ -115,7 +116,7 @@ describe("updateHeadingFromTarget", () => {
       updateHeadingFromTarget(s144, 0, 0, 0, 100, 1 / 144, cfg);
     }
 
-    // Both should converge to ~PI/2 after 1 second at turnRate 4.5 rad/s
+    // Both should converge to ~PI/2 after 1 second at turnRate 5.8 rad/s
     // Allow 0.1 rad tolerance (the clamped nature means exact parity isn't possible)
     expect(Math.abs(s30.heading - s144.heading)).toBeLessThan(0.1);
   });
