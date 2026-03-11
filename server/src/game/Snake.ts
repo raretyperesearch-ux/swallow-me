@@ -26,6 +26,7 @@ export interface ServerSnake {
   skinId: number;
   lastInputTime: number;
   spawnTime: number;
+  _boostDropCounter?: number;
 }
 
 export function createSnake(
