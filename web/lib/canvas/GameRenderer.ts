@@ -1267,31 +1267,37 @@ export class GameRenderer {
       if (!snake.alive) continue;
       const isMe = id === this.mySessionId;
 
+      // Cap dt to prevent lag spike teleporting
+      const safeDt = Math.min(dt, 0.05);
+
       if (isMe) {
-        // ═══ LOCAL PLAYER ═══
-        // ANGLE: instant from joystick input — zero lag
-        snake.angle = this.inputAngle;
+        // ═══ STEERING: Slither.io-style clamped turn rate ═══
+        let delta = this.inputAngle - snake.angle;
+        while (delta > Math.PI) delta -= Math.PI * 2;
+        while (delta < -Math.PI) delta += Math.PI * 2;
 
-        // SPEED: use server speed (updated via onChange) — instant for boost
-        // because server processes boost within one tick
-        const speed = snake.serverSpeed || 8;
+        // Turn rate: slower when boosting (wider arcs), faster at normal speed
+        const isBoosting = this.touchBoosting || this.mouseDown;
+        const maxTurnRate = isBoosting ? 2.5 : 4.5; // radians per second
+        const maxStep = maxTurnRate * safeDt;
+        snake.angle += Math.max(-maxStep, Math.min(maxStep, delta));
 
-        // MOVE: forward at server speed, NO blend toward server position
-        snake.headX += Math.cos(snake.angle) * speed;
-        snake.headY += Math.sin(snake.angle) * speed;
+        // ═══ MOVEMENT: constant speed, time-based ═══
+        const speed = isBoosting ? 480 : 240; // must match server: speed * tickRate
+        snake.headX += Math.cos(snake.angle) * speed * safeDt;
+        snake.headY += Math.sin(snake.angle) * speed * safeDt;
 
-        // CORRECTION: apply gradually (only if onChange set a correction)
+        // ═══ SERVER CORRECTION: only when onChange fires ═══
         if (snake.correctionFrames > 0) {
-          const fraction = 1 / snake.correctionFrames;
-          snake.headX += snake.correctionX * fraction;
-          snake.headY += snake.correctionY * fraction;
-          snake.correctionX -= snake.correctionX * fraction;
-          snake.correctionY -= snake.correctionY * fraction;
+          const frac = 1 / snake.correctionFrames;
+          snake.headX += snake.correctionX * frac;
+          snake.headY += snake.correctionY * frac;
+          snake.correctionX -= snake.correctionX * frac;
+          snake.correctionY -= snake.correctionY * frac;
           snake.correctionFrames--;
         }
 
-        // BOOST: sound and particles
-        const isBoosting = this.touchBoosting || this.mouseDown;
+        // ═══ BOOST: sound and particles ═══
         if (isBoosting && !this.wasBoosting) this.audio.startBoost();
         if (!isBoosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = isBoosting;
@@ -1300,25 +1306,25 @@ export class GameRenderer {
         }
 
       } else {
-        // ═══ OTHER SNAKES ═══
-        // Same correction-based approach — no per-frame blend
-        const speed = snake.serverSpeed || 8;
-        snake.headX += Math.cos(snake.angle) * speed;
-        snake.headY += Math.sin(snake.angle) * speed;
+        // ═══ OTHER SNAKES: turn-rate steering toward server angle ═══
+        let delta = snake.serverAngle - snake.angle;
+        while (delta > Math.PI) delta -= Math.PI * 2;
+        while (delta < -Math.PI) delta += Math.PI * 2;
+        const maxStep = 4.5 * safeDt;
+        snake.angle += Math.max(-maxStep, Math.min(maxStep, delta));
 
-        // Apply angle from server with smooth step
-        let ad = snake.serverAngle - snake.angle;
-        while (ad > Math.PI) ad -= Math.PI * 2;
-        while (ad < -Math.PI) ad += Math.PI * 2;
-        snake.angle += ad * 0.3;
+        // Move forward at server speed (converted to px/sec)
+        const speed = (snake.serverSpeed || 8) * 30; // server units/tick * 30 ticks/sec
+        snake.headX += Math.cos(snake.angle) * speed * safeDt;
+        snake.headY += Math.sin(snake.angle) * speed * safeDt;
 
-        // Apply correction from onChange
+        // Server correction
         if (snake.correctionFrames > 0) {
-          const fraction = 1 / snake.correctionFrames;
-          snake.headX += snake.correctionX * fraction;
-          snake.headY += snake.correctionY * fraction;
-          snake.correctionX -= snake.correctionX * fraction;
-          snake.correctionY -= snake.correctionY * fraction;
+          const frac = 1 / snake.correctionFrames;
+          snake.headX += snake.correctionX * frac;
+          snake.headY += snake.correctionY * frac;
+          snake.correctionX -= snake.correctionX * frac;
+          snake.correctionY -= snake.correctionY * frac;
           snake.correctionFrames--;
         }
 
@@ -1327,11 +1333,10 @@ export class GameRenderer {
         }
       }
 
-      // ═══ SAFETY: prevent runaway drift ═══
-      // If somehow we're >200 units from server, hard snap
-      const dx = snake.serverHeadX - snake.headX;
-      const dy = snake.serverHeadY - snake.headY;
-      if (dx * dx + dy * dy > 40000) {
+      // ═══ SAFETY: hard snap if >200 units from server ═══
+      const ex = snake.serverHeadX - snake.headX;
+      const ey = snake.serverHeadY - snake.headY;
+      if (ex * ex + ey * ey > 40000) {
         snake.headX = snake.serverHeadX;
         snake.headY = snake.serverHeadY;
         snake.correctionFrames = 0;
