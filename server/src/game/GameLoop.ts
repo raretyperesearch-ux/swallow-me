@@ -11,9 +11,12 @@ import {
 } from "./Physics";
 import { updateBotInput } from "./BotAI";
 
+// Track which snake dropped each boost food — prevents eating own trail
+const boostFoodOwners = new Map<string, string>(); // foodId → snakeId
+
 export interface GameLoopCallbacks {
   onKill: (event: KillEvent) => void;
-  onBoostFoodDrop: (x: number, y: number) => void;
+  onBoostFoodDrop: (x: number, y: number) => string; // returns food ID
   onFoodEaten: (eats: { foodId: string; snakeId: string }[]) => void;
   onFoodSpawned: (foods: ServerFood[]) => void;
 }
@@ -44,7 +47,12 @@ export function runGameTick(
     if (wasBoosting && snake.length < prevLength) {
       const tail = snake.segments[snake.segments.length - 1];
       if (tail) {
-        callbacks.onBoostFoodDrop(tail.x, tail.y);
+        const foodId = callbacks.onBoostFoodDrop(tail.x, tail.y);
+        if (foodId) {
+          boostFoodOwners.set(foodId, snake.id);
+          // Auto-expire after 3 seconds so other snakes can eat it
+          setTimeout(() => boostFoodOwners.delete(foodId), 3000);
+        }
       }
     }
   }
@@ -91,14 +99,23 @@ export function runGameTick(
   const foodEats = checkFoodCollisions(snakes, foods);
   const eatenFoods: { foodId: string; snakeId: string }[] = [];
   for (const eat of foodEats) {
+    // Prevent eating your own boost trail for 3 seconds
+    if (boostFoodOwners.get(eat.foodId) === eat.snakeId) continue;
+
     const snake = snakes.get(eat.snakeId);
     const food = foods.get(eat.foodId);
     if (snake && food) {
-      const growAmount = food.size === 2
-        ? GAME_CONFIG.FOOD_VALUE * 3
-        : GAME_CONFIG.FOOD_VALUE;
+      let growAmount: number;
+      if (food.size === 2) {
+        growAmount = GAME_CONFIG.FOOD_VALUE * 3; // death food = 3x
+      } else if (boostFoodOwners.has(eat.foodId)) {
+        growAmount = GAME_CONFIG.FOOD_VALUE * 0.3; // boost trail = 0.3x
+      } else {
+        growAmount = GAME_CONFIG.FOOD_VALUE; // normal food = 1x
+      }
       growSnake(snake, growAmount);
       foods.delete(eat.foodId);
+      boostFoodOwners.delete(eat.foodId);
       eatenFoods.push({ foodId: eat.foodId, snakeId: eat.snakeId });
     }
   }

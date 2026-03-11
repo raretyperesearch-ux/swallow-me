@@ -13,7 +13,7 @@ export const GAME_CONFIG = {
   BASE_SPEED: 8.0, // Normal movement speed (units per tick)
   BOOST_SPEED: 16.0, // Speed while boosting
   TURN_RATE: 0.15, // Max radians per tick (~4.5 rad/sec at 30Hz, full 360 in ~1.4s)
-  BOOST_LENGTH_COST: 0.3, // Length units lost per tick while boosting
+  BOOST_LENGTH_COST: 0.5, // Length units lost per tick while boosting
   MIN_BOOST_LENGTH: 15, // Can't boost below this length
 
   // Snake sizing
@@ -28,11 +28,11 @@ export const GAME_CONFIG = {
   TURN_RADIUS_SCALE: 0.15, // Additional radius per length unit
 
   // Food
-  INITIAL_FOOD_COUNT: 1000, // Food orbs at game start
-  MAX_FOOD: 2000, // Cap on total food
-  FOOD_VALUE: 1.0, // Length gained per food eaten
-  DEATH_FOOD_COUNT: 25, // Food orbs dropped on death
-  FOOD_SPAWN_RATE: 5, // New food per tick when below minimum
+  INITIAL_FOOD_COUNT: 700, // Food orbs at game start
+  MAX_FOOD: 1400, // Cap on total food
+  FOOD_VALUE: 0.5, // Length gained per food eaten
+  DEATH_FOOD_COUNT: 20, // Food orbs dropped on death
+  FOOD_SPAWN_RATE: 3, // New food per tick when below minimum
 
   // Lobby
   MIN_PLAYERS_TO_START: 3, // Real + bots needed

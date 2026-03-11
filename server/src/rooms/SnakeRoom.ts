@@ -178,6 +178,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         const food: ServerFood = { id: uuidv4(), x, y, size: 1 };
         this.serverFoods.set(food.id, food);
         this.addFoodToState(food);
+        return food.id;
       },
       onFoodEaten: (eats) => {
         // Group eaten food by eater for client-side filtering
