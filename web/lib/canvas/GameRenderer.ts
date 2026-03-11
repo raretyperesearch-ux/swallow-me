@@ -300,7 +300,13 @@ export class GameRenderer {
   private bgPattern: CanvasPattern | null = null; // unused legacy
   private hexPattern: CanvasPattern | null = null;
   private hexPatternCanvas: HTMLCanvasElement | null = null;
-  private bgBaseColor = '#050508';
+  private bgBaseColor = '#1a1a2e';
+  private bgLogoCanvas: HTMLCanvasElement | null = null;
+  private bgLogoPositions: Array<[number, number]> = [
+    [-3200, -2800], [2400, -3500], [-1000, 1200],
+    [3800, 800], [-2600, 3100], [1500, -1000],
+    [400, 3800], [-3800, -500], [2800, 2600],
+  ];
 
   // Assets
   private bgImage: HTMLImageElement | null = null;
@@ -481,8 +487,9 @@ export class GameRenderer {
     // Load persisted mute state
     this.audio.loadMuteState();
 
-    // Pre-render hex tile pattern for background
+    // Pre-render hex tile pattern + logo for background
     this.initHexPattern();
+    this.initBgLogo();
 
     this.preloadAssets().then(() => {
       this.assetsLoaded = true;
@@ -1490,7 +1497,8 @@ export class GameRenderer {
     const ctx = this.ctx;
 
     // Hex background (fills base color + pattern, no clearRect needed)
-    this.drawHexBackground(ctx, W, H);
+    this.drawHexBackground(ctx, this.camX, this.camY, this.zoom, W, H);
+    this.drawBgLogos(ctx, this.camX, this.camY, this.zoom, W, H);
 
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
@@ -1540,11 +1548,9 @@ export class GameRenderer {
   // ─── Hexagon Background Pattern ─────────────────
 
   private initHexPattern(): void {
-    const r = 30; // hex radius
-    const w = Math.sqrt(3) * r; // pointy-top hex width
-    const vStep = 1.5 * r;      // vertical distance between rows
-
-    // Pattern tile that repeats cleanly across staggered rows
+    const r = 40;
+    const w = Math.sqrt(3) * r;
+    const vStep = 1.5 * r;
     const tileW = w * 2;
     const tileH = vStep * 2;
 
@@ -1553,7 +1559,7 @@ export class GameRenderer {
     c.height = Math.ceil(tileH);
     const g = c.getContext('2d')!;
 
-    g.fillStyle = this.bgBaseColor;
+    g.fillStyle = '#1a1a2e';
     g.fillRect(0, 0, c.width, c.height);
 
     const drawHex = (cx: number, cy: number, radius: number) => {
@@ -1568,7 +1574,6 @@ export class GameRenderer {
       g.closePath();
     };
 
-    // 2x2 staggered centers to guarantee seamless repeat
     const centers: Array<[number, number]> = [
       [w * 0.5, r],
       [w * 1.5, r],
@@ -1577,12 +1582,12 @@ export class GameRenderer {
     ];
 
     for (const [cx, cy] of centers) {
-      drawHex(cx, cy, r - 1);
-      g.fillStyle = '#0a0a0f';
+      drawHex(cx, cy, r - 0.5);
+      g.fillStyle = '#141425';
       g.fill();
 
-      drawHex(cx, cy, r - 1);
-      g.strokeStyle = 'rgba(255,255,255,0.03)';
+      drawHex(cx, cy, r - 0.5);
+      g.strokeStyle = 'rgba(255,255,255,0.06)';
       g.lineWidth = 1;
       g.stroke();
     }
@@ -1591,7 +1596,32 @@ export class GameRenderer {
     this.hexPattern = this.ctx.createPattern(c, 'repeat');
   }
 
-  private drawHexBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+  private initBgLogo(): void {
+    const c = document.createElement('canvas');
+    c.width = 200;
+    c.height = 100;
+    const g = c.getContext('2d')!;
+
+    g.clearRect(0, 0, c.width, c.height);
+    g.font = '700 48px Inter, Arial, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'top';
+    g.fillStyle = '#ffffff';
+    g.fillText('BUY', 100, 4);
+    g.fillStyle = '#00E676';
+    g.fillText('MONEY', 100, 50);
+
+    this.bgLogoCanvas = c;
+  }
+
+  private drawHexBackground(
+    ctx: CanvasRenderingContext2D,
+    camX: number,
+    camY: number,
+    zoom: number,
+    W: number,
+    H: number,
+  ): void {
     ctx.save();
     ctx.fillStyle = this.bgBaseColor;
     ctx.fillRect(0, 0, W, H);
@@ -1601,15 +1631,41 @@ export class GameRenderer {
       return;
     }
 
-    // Wrap camera offset by tile size to avoid precision drift over long sessions
     const tw = this.hexPatternCanvas.width;
     const th = this.hexPatternCanvas.height;
-    const ox = ((-this.camX * this.zoom) % tw + tw) % tw;
-    const oy = ((-this.camY * this.zoom) % th + th) % th;
+    const ox = ((-camX * zoom) % tw + tw) % tw;
+    const oy = ((-camY * zoom) % th + th) % th;
 
     ctx.translate(ox - tw, oy - th);
     ctx.fillStyle = this.hexPattern;
     ctx.fillRect(0, 0, W + tw * 2, H + th * 2);
+
+    ctx.restore();
+  }
+
+  private drawBgLogos(
+    ctx: CanvasRenderingContext2D,
+    camX: number,
+    camY: number,
+    zoom: number,
+    W: number,
+    H: number,
+  ): void {
+    if (!this.bgLogoCanvas) return;
+
+    ctx.save();
+    ctx.globalAlpha = 0.04;
+
+    const s = Math.max(0.65, Math.min(1.25, zoom));
+    const logoW = 200 * s;
+    const logoH = 100 * s;
+
+    for (const [wx, wy] of this.bgLogoPositions) {
+      const sx = (wx - camX) * zoom + W * 0.5;
+      const sy = (wy - camY) * zoom + H * 0.5;
+      if (sx < -logoW || sy < -logoH || sx > W + logoW || sy > H + logoH) continue;
+      ctx.drawImage(this.bgLogoCanvas, sx - logoW * 0.5, sy - logoH * 0.5, logoW, logoH);
+    }
 
     ctx.restore();
   }
