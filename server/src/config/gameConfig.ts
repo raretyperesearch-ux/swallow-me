@@ -3,7 +3,7 @@
 export const GAME_CONFIG = {
   // Tick rate
   TICK_RATE: 30, // Server physics updates per second
-  CLIENT_SEND_RATE: 20, // State sync pushes per second
+  CLIENT_SEND_RATE: 30, // 33ms between updates — minimal lag
 
   // Arena
   ARENA_RADIUS: 5000, // Circular map radius in game units

@@ -20,7 +20,6 @@ interface LocalSnake {
   isBot: boolean;
   kills: number;
   valueUsdc: number;
-  _currentSpeed?: number;
 }
 
 // Unified pooled particle — pre-allocated, never created/destroyed in hot path
@@ -387,7 +386,7 @@ export class GameRenderer {
 
   // Input send throttle — only in render loop
   private lastInputSend: number = 0;
-  private readonly INPUT_SEND_INTERVAL = 50;  // 20 sends/sec max
+  private readonly INPUT_SEND_INTERVAL = 33;  // 30 sends/sec — match server sync rate
 
   // Loading
   private loadingProgress: number = 0;
@@ -725,13 +724,6 @@ export class GameRenderer {
     this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 8, tail.y + (Math.random() - 0.5) * 8, 1, color, 2, 0.8, 2, 5);
   }
 
-  // Whoosh trail: wider, brighter particles during boost
-  private spawnBoostParticleLarge(snake: LocalSnake) {
-    if (snake.segments.length < 3) return;
-    const tail = snake.segments[snake.segments.length - 1];
-    const color = SKIN_PATTERNS[snake.skinId % SKIN_PATTERNS.length].primary;
-    this.emitPool(this.boostPool, tail.x + (Math.random() - 0.5) * 14, tail.y + (Math.random() - 0.5) * 14, 1, color, 3, 1.0, 3, 8);
-  }
 
   // ─── Eat Popups (object pool) ──────────────────────
 
@@ -1253,110 +1245,59 @@ export class GameRenderer {
 
     this.boostFrameCounter++;
 
-    // Exponential smoothing factors — frame-rate independent
-    const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
-    const otherTurnLerp = 0.4; // Other players/bots: snap hard to server angle
-    // Server position blend
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
-      const isMe = id === this.mySessionId;
 
-      // --- CLIENT-SIDE PREDICTION ---
-      if (isMe) {
-        // Smooth turning — delta-time based, matches server turn radius scaling
-        let angleDiff = this.inputAngle - snake.angle;
-        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+      if (id === this.mySessionId) {
+        // ANGLE: instant from joystick — zero lag on direction
+        snake.angle = this.inputAngle;
 
-        // Server turn rate scales with snake size
-        const snakeLen = snake.serverLength || 40;
-        const minRadius = 30 + snakeLen * 0.15;
+        // POSITION: fast lerp to server — 0.5 = reaches target in 2 frames
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.5;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.5;
+
+        // BOOST: sound and particles
         const isBoosting = this.touchBoosting || this.mouseDown;
-        const currentSpeed = isBoosting ? 16.0 : 8.0;
-        const maxTurnPerSec = currentSpeed / minRadius; // radians per second
-
-        // Apply turn rate capped by max, scaled by dt (frame-rate independent)
-        const maxTurnThisFrame = maxTurnPerSec * dt * 60; // normalize to 60fps
-        if (Math.abs(angleDiff) > maxTurnThisFrame) {
-          snake.angle += Math.sign(angleDiff) * maxTurnThisFrame;
-        } else {
-          snake.angle += angleDiff * 0.5; // ease into final angle when close
-        }
-
-        // Instant boost on, smooth off
-        if (!snake._currentSpeed) snake._currentSpeed = 8.0;
-        if (isBoosting) {
-          snake._currentSpeed = 16.0;
-        } else {
-          snake._currentSpeed += (8.0 - snake._currentSpeed) * 0.15;
-        }
-        const moveDist = snake._currentSpeed * dt * 60;
-        snake.headX += Math.cos(snake.angle) * moveDist;
-        snake.headY += Math.sin(snake.angle) * moveDist;
-
-        // Consistent server blend
-        const blendFactor = 0.15;
-        snake.headX += (snake.serverHeadX - snake.headX) * blendFactor;
-        snake.headY += (snake.serverHeadY - snake.headY) * blendFactor;
-
-        // Boost sound — uses local input for instant response
         if (isBoosting && !this.wasBoosting) this.audio.startBoost();
         if (!isBoosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = isBoosting;
-
-        // Boost particles: when boosting, emit more (whoosh trail)
-        if (isBoosting) {
-          if (this.boostFrameCounter % 2 === 0) {
-            this.spawnBoostParticle(snake);
-            this.spawnBoostParticleLarge(snake);
-          }
+        if (snake.boosting && this.boostFrameCounter % 3 === 0) {
+          this.spawnBoostParticle(snake);
         }
       } else {
-        // Other snakes: smooth interpolation toward server position
-        const lerpRate = 0.25;
-        snake.headX += (snake.serverHeadX - snake.headX) * lerpRate;
-        snake.headY += (snake.serverHeadY - snake.headY) * lerpRate;
-        let angleDiff = snake.serverAngle - snake.angle;
-        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * lerpRate;
-
-        // Boost particles for others too (visible)
+        // OTHER SNAKES: same fast lerp
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.5;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.5;
+        snake.angle += (function() {
+          let d = snake.serverAngle - snake.angle;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          return d * 0.5;
+        })();
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
           this.spawnBoostParticle(snake);
         }
       }
 
-      // Max drift cap: snap if client is >30 units from server truth
-      const driftX = snake.serverHeadX - snake.headX;
-      const driftY = snake.serverHeadY - snake.headY;
-      if (driftX * driftX + driftY * driftY > 900) { // 30^2 = 900
-        snake.headX = snake.serverHeadX;
-        snake.headY = snake.serverHeadY;
-      }
-
-      // --- CHAIN CONSTRAINT (no gaps) ---
+      // SEGMENTS: follow the head
       if (snake.segments.length > 0) {
         snake.segments[0].x = snake.headX;
         snake.segments[0].y = snake.headY;
       }
-
-      const SEGMENT_SPACING = 4; // must match server GAME_CONFIG.SEGMENT_SPACING
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
         const dx = curr.x - prev.x;
         const dy = curr.y - prev.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-
-        if (dist > SEGMENT_SPACING) {
-          const angle = Math.atan2(dy, dx);
-          curr.x = prev.x + Math.cos(angle) * SEGMENT_SPACING;
-          curr.y = prev.y + Math.sin(angle) * SEGMENT_SPACING;
+        if (dist > 4) {
+          const a = Math.atan2(dy, dx);
+          curr.x = prev.x + Math.cos(a) * 4;
+          curr.y = prev.y + Math.sin(a) * 4;
         }
       }
 
-      // Grow/shrink to match server length
+      // LENGTH
       const targetLen = snake.serverLength || 40;
       while (snake.segments.length < targetLen) {
         const last = snake.segments[snake.segments.length - 1];
