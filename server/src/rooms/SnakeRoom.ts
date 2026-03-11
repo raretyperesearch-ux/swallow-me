@@ -330,6 +330,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       if (bots.length > 0) {
         const [botId, bot] = bots[Math.floor(Math.random() * bots.length)];
         bot.alive = false;
+        // handleKill already removes from state.snakes, so don't delete here
         this.handleKill({
           killer: null,
           victim: botId,
@@ -338,6 +339,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
           killerName: "timeout",
           timestamp: Date.now(),
         });
+        // Clean up server state and bot AI after handleKill
+        this.serverSnakes.delete(botId);
+        removeBotState(botId);
       }
     }
   }

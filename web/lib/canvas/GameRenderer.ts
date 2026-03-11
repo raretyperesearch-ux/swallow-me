@@ -647,11 +647,6 @@ export class GameRenderer {
         this.deathCamX = me.headX;
         this.deathCamY = me.headY;
       }
-      // Log client-server drift at moment of death
-      if (me) {
-        const drift = Math.sqrt((me.headX - me.serverHeadX) ** 2 + (me.headY - me.serverHeadY) ** 2);
-        console.log(`[CLIENT DEATH] myHead: ${me.headX.toFixed(0)},${me.headY.toFixed(0)} serverHead: ${me.serverHeadX.toFixed(0)},${me.serverHeadY.toFixed(0)} drift: ${drift.toFixed(0)}`);
-      }
       this.shakeLife = 0.3;
       // Start death animation — delay showing overlay
       this.deathAnimating = true;
@@ -1262,32 +1257,42 @@ export class GameRenderer {
     const turnLerp = 0.3; // Local player: snappy, matches server TURN_RATE=0.15
     const otherTurnLerp = 0.4; // Other players/bots: snap hard to server angle
     // Server position blend
-    const serverBlend = 0.3;  // local player: 30% blend per frame toward server
-    const otherBlend = 0.5;   // other players/bots: 50% blend — accuracy > smoothness
-
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
       const isMe = id === this.mySessionId;
 
       // --- CLIENT-SIDE PREDICTION ---
       if (isMe) {
-        // Smooth angle toward mouse target (dt-based)
+        // Turn rate matches server: min turn radius scales with snake length
+        const segCount = snake.segments ? snake.segments.length : 40;
+        const minRadius = 30 + segCount * 0.15;
+        const isBoosting = this.touchBoosting || this.mouseDown;
+        const currentSpeed = isBoosting ? 16.0 : 8.0;
+        const maxTurnRate = currentSpeed / minRadius;
+        const effectiveTurnRate = Math.min(0.15, maxTurnRate);
+
         let angleDiff = this.inputAngle - snake.angle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * turnLerp;
+        if (Math.abs(angleDiff) > effectiveTurnRate) {
+          snake.angle += Math.sign(angleDiff) * effectiveTurnRate;
+        } else {
+          snake.angle = this.inputAngle;
+        }
 
-        // Use LOCAL input for instant feedback, not server state
-        const isBoosting = this.touchBoosting || this.mouseDown;
-        const targetSpeed = isBoosting ? 16.0 : 8.0;
+        // Instant boost on, smooth off
         if (!snake._currentSpeed) snake._currentSpeed = 8.0;
-        snake._currentSpeed += (targetSpeed - snake._currentSpeed) * 0.2;
-        const moveDist = snake._currentSpeed * dt * 60; // normalize to 60fps baseline
+        if (isBoosting) {
+          snake._currentSpeed = 16.0;
+        } else {
+          snake._currentSpeed += (8.0 - snake._currentSpeed) * 0.15;
+        }
+        const moveDist = snake._currentSpeed * dt * 60;
         snake.headX += Math.cos(snake.angle) * moveDist;
         snake.headY += Math.sin(snake.angle) * moveDist;
 
-        // Blend toward server — SOFTER during boost to prevent lunge stutter
-        const blendFactor = isBoosting ? 0.08 : 0.25;
+        // Consistent server blend
+        const blendFactor = 0.15;
         snake.headX += (snake.serverHeadX - snake.headX) * blendFactor;
         snake.headY += (snake.serverHeadY - snake.headY) * blendFactor;
 
@@ -1300,18 +1305,18 @@ export class GameRenderer {
         if (isBoosting) {
           if (this.boostFrameCounter % 2 === 0) {
             this.spawnBoostParticle(snake);
-            // Extra whoosh: 1.5x size particles
             this.spawnBoostParticleLarge(snake);
           }
-        } else if (this.boostFrameCounter % 3 === 0) {
-          // Normal non-boost: no particles
         }
       } else {
-        // Other players: show EXACTLY where the server says they are
-        // No prediction, no interpolation — accuracy over smoothness
-        snake.headX = snake.serverHeadX;
-        snake.headY = snake.serverHeadY;
-        snake.angle = snake.serverAngle;
+        // Other snakes: smooth interpolation toward server position
+        const lerpRate = 0.25;
+        snake.headX += (snake.serverHeadX - snake.headX) * lerpRate;
+        snake.headY += (snake.serverHeadY - snake.headY) * lerpRate;
+        let angleDiff = snake.serverAngle - snake.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        snake.angle += angleDiff * lerpRate;
 
         // Boost particles for others too (visible)
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {

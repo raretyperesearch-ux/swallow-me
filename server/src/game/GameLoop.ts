@@ -12,7 +12,7 @@ import {
 import { updateBotInput } from "./BotAI";
 
 // Track which snake dropped each boost food — prevents eating own trail
-const boostFoodOwners = new Map<string, string>(); // foodId → snakeId
+const boostFoodOwners = new Map<string, { snakeId: string; time: number }>(); // foodId → owner+timestamp
 
 export interface GameLoopCallbacks {
   onKill: (event: KillEvent) => void;
@@ -49,9 +49,7 @@ export function runGameTick(
       if (tail) {
         const foodId = callbacks.onBoostFoodDrop(tail.x, tail.y);
         if (foodId) {
-          boostFoodOwners.set(foodId, snake.id);
-          // Auto-expire after 3 seconds so other snakes can eat it
-          setTimeout(() => boostFoodOwners.delete(foodId), 3000);
+          boostFoodOwners.set(foodId, { snakeId: snake.id, time: Date.now() });
         }
       }
     }
@@ -104,10 +102,12 @@ export function runGameTick(
 
   // 5. Check food consumption (uses spatial grid internally)
   const foodEats = checkFoodCollisions(snakes, foods);
+  const now = Date.now();
   const eatenFoods: { foodId: string; snakeId: string }[] = [];
   for (const eat of foodEats) {
     // Prevent eating your own boost trail for 3 seconds
-    if (boostFoodOwners.get(eat.foodId) === eat.snakeId) continue;
+    const owner = boostFoodOwners.get(eat.foodId);
+    if (owner && owner.snakeId === eat.snakeId && now - owner.time < 3000) continue;
 
     const snake = snakes.get(eat.snakeId);
     const food = foods.get(eat.foodId);
@@ -124,6 +124,13 @@ export function runGameTick(
       foods.delete(eat.foodId);
       boostFoodOwners.delete(eat.foodId);
       eatenFoods.push({ foodId: eat.foodId, snakeId: eat.snakeId });
+    }
+  }
+
+  // Periodic cleanup of expired boost food entries (every ~1 second)
+  if (now % 1000 < 34) {
+    for (const [fid, entry] of boostFoodOwners) {
+      if (now - entry.time > 5000) boostFoodOwners.delete(fid);
     }
   }
 

@@ -35,14 +35,14 @@ function getBodyRadius(segmentCount: number): number {
 function isPointInsideSnakeLoop(
   px: number, py: number,
   segments: { x: number; y: number }[],
-  minSegments: number = 30
+  minSegments: number = 20
 ): boolean {
   const n = segments.length;
   if (n < minSegments) return false;
 
   const head = segments[0];
   const tail = segments[n - 1];
-  const closeDist = 80;
+  const closeDist = 200;
   const dx = head.x - tail.x;
   const dy = head.y - tail.y;
   if (dx * dx + dy * dy > closeDist * closeDist) return false;
@@ -65,7 +65,7 @@ function isPointInsideSnakeLoop(
 }
 
 // Spatial grid for food only — snake collision is brute force (airtight)
-const foodGrid = new SpatialGrid(50);
+const foodGrid = new SpatialGrid(30);
 
 /**
  * Check all head-to-body collisions between snakes.
