@@ -1329,7 +1329,7 @@ export class GameRenderer {
       }
 
       const snakeBodyRadius = 6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3;
-      const spacing = Math.max(3, snakeBodyRadius * 0.7);
+      const spacing = Math.max(3, snakeBodyRadius * 0.6);
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
@@ -1643,49 +1643,21 @@ export class GameRenderer {
     }
     ctx.fill();
 
-    // --- PASS 3: Highlight strip along top edge of body ---
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = "#ffffff";
+    // --- PASS 3: Highlight strip (3D tube illusion) ---
+    const highlightColor = lightenColor(snakeColor, 0.25);
+    ctx.fillStyle = highlightColor;
+    ctx.globalAlpha = 0.3;
     ctx.beginPath();
     for (let i = segCount - 1; i >= 0; i--) {
       const seg = snake.segments[i];
       if (!this.isInView(seg.x, seg.y, 200)) continue;
       const sx = this.toScreenX(seg.x);
-      const sy = this.toScreenY(seg.y) - bodyRadius * 0.3;
-      ctx.moveTo(sx + bodyRadius * 0.55, sy);
-      ctx.arc(sx, sy, bodyRadius * 0.55, 0, Math.PI * 2);
-    }
-    ctx.fill();
-
-    // --- PASS 4: Shadow strip along bottom edge of body ---
-    ctx.fillStyle = "#000000";
-    ctx.globalAlpha = 0.12;
-    ctx.beginPath();
-    for (let i = segCount - 1; i >= 0; i--) {
-      const seg = snake.segments[i];
-      if (!this.isInView(seg.x, seg.y, 200)) continue;
-      const sx = this.toScreenX(seg.x);
-      const sy = this.toScreenY(seg.y) + bodyRadius * 0.35;
-      ctx.moveTo(sx + bodyRadius * 0.5, sy);
-      ctx.arc(sx, sy, bodyRadius * 0.5, 0, Math.PI * 2);
+      const sy = this.toScreenY(seg.y);
+      ctx.moveTo(sx - bodyRadius * 0.15 + bodyRadius * 0.5, sy - bodyRadius * 0.3);
+      ctx.arc(sx - bodyRadius * 0.15, sy - bodyRadius * 0.3, bodyRadius * 0.5, 0, Math.PI * 2);
     }
     ctx.fill();
     ctx.globalAlpha = 1.0;
-
-    // --- PASS 5: Subtle segment ridges ---
-    if (segCount <= 300) {
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.06)";
-      ctx.lineWidth = 1;
-      for (let i = 2; i < segCount; i += 3) {
-        const seg = snake.segments[i];
-        if (!this.isInView(seg.x, seg.y, 200)) continue;
-        const sx = this.toScreenX(seg.x);
-        const sy = this.toScreenY(seg.y);
-        ctx.beginPath();
-        ctx.arc(sx, sy, bodyRadius * 0.9, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
 
     // --- HEAD (seamless with body + eyes on top) ---
     const head = snake.segments[0];
