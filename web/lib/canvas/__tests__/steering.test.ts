@@ -5,12 +5,13 @@ import {
   lerp,
   angleDiff,
   updateHeadingFromTarget,
+  updateBoost,
   chainConstrain,
   getBodyRadius,
   pointToSegmentDistSq,
   DEFAULT_STEERING,
 } from "../steering";
-import type { SnakeMotionState, SteeringConfig } from "../steering";
+import type { SnakeMotionState, SteeringConfig, BoostState } from "../steering";
 
 // ─── clamp / clamp01 / lerp ─────────────────────────
 
@@ -181,5 +182,59 @@ describe("pointToSegmentDistSq", () => {
 
   it("handles degenerate (zero-length) segment", () => {
     expect(pointToSegmentDistSq(3, 4, 0, 0, 0, 0)).toBeCloseTo(25);
+  });
+});
+
+// ─── updateBoost ────────────────────────────────────
+
+describe("updateBoost", () => {
+  it("smoothly rises toward 1 when wantsBoost is true", () => {
+    const s: BoostState = { boostAlpha: 0, wantsBoost: true };
+    updateBoost(s, 1 / 60);
+    expect(s.boostAlpha).toBeGreaterThan(0);
+    expect(s.boostAlpha).toBeLessThan(1);
+    // After many frames, should converge near 1
+    for (let i = 0; i < 120; i++) updateBoost(s, 1 / 60);
+    expect(s.boostAlpha).toBeGreaterThan(0.99);
+  });
+
+  it("smoothly falls toward 0 when wantsBoost is false", () => {
+    const s: BoostState = { boostAlpha: 1, wantsBoost: false };
+    updateBoost(s, 1 / 60);
+    expect(s.boostAlpha).toBeLessThan(1);
+    expect(s.boostAlpha).toBeGreaterThan(0);
+    for (let i = 0; i < 120; i++) updateBoost(s, 1 / 60);
+    expect(s.boostAlpha).toBeLessThan(0.01);
+  });
+
+  it("never snaps — alpha changes smoothly per frame", () => {
+    const s: BoostState = { boostAlpha: 0, wantsBoost: true };
+    const steps: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      updateBoost(s, 1 / 60);
+      steps.push(s.boostAlpha);
+    }
+    // Each step should be strictly increasing
+    for (let i = 1; i < steps.length; i++) {
+      expect(steps[i]).toBeGreaterThan(steps[i - 1]);
+    }
+  });
+
+  it("rise is faster than fall (kUp > kDown)", () => {
+    const sUp: BoostState = { boostAlpha: 0, wantsBoost: true };
+    const sDown: BoostState = { boostAlpha: 1, wantsBoost: false };
+    updateBoost(sUp, 1 / 60);
+    updateBoost(sDown, 1 / 60);
+    // Rise delta should be larger than fall delta
+    expect(sUp.boostAlpha).toBeGreaterThan(1 - sDown.boostAlpha);
+  });
+
+  it("produces similar results at 30fps and 144fps", () => {
+    const s30: BoostState = { boostAlpha: 0, wantsBoost: true };
+    const s144: BoostState = { boostAlpha: 0, wantsBoost: true };
+    for (let i = 0; i < 30; i++) updateBoost(s30, 1 / 30);
+    for (let i = 0; i < 144; i++) updateBoost(s144, 1 / 144);
+    // After 1 second both should be near the same value
+    expect(Math.abs(s30.boostAlpha - s144.boostAlpha)).toBeLessThan(0.02);
   });
 });

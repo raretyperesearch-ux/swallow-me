@@ -1,7 +1,7 @@
 import * as Colyseus from "colyseus.js";
 import type { VoicePeer } from "../voice/VoiceChat";
-import { angleDiff, clamp, DEFAULT_STEERING, updateHeadingFromTarget, chainConstrain, getBodyRadius } from "./steering";
-import type { SnakeMotionState } from "./steering";
+import { angleDiff, clamp, lerp, DEFAULT_STEERING, updateHeadingFromTarget, updateBoost, chainConstrain, getBodyRadius } from "./steering";
+import type { SnakeMotionState, BoostState } from "./steering";
 import { Joystick } from "./joystick";
 
 // ─── Types ──────────────────────────────────────────
@@ -27,6 +27,8 @@ interface LocalSnake {
   correctionX: number;
   correctionY: number;
   correctionFrames: number;
+  // Smooth boost transition
+  boostAlpha: number;
 }
 
 // Unified pooled particle — pre-allocated, never created/destroyed in hot path
@@ -559,6 +561,7 @@ export class GameRenderer {
         correctionX: 0,
         correctionY: 0,
         correctionFrames: 0,
+        boostAlpha: 0,
       });
 
       snake.onChange(() => {
@@ -1188,11 +1191,8 @@ export class GameRenderer {
 
     // Text info
     const delta = angleDiff(this.inputAngle, me.angle);
-    const isBoosting = this.touchBoosting || this.mouseDown;
-    const speedT = isBoosting ? 480 : 240;
-    const motion: SnakeMotionState = { heading: me.angle, speed: speedT, minSpeed: 240, maxSpeed: 480 };
-    const turnRateNow = (motion.speed - motion.minSpeed) / (motion.maxSpeed - motion.minSpeed || 1);
-    const maxTurn = DEFAULT_STEERING.turnRateSlow + (DEFAULT_STEERING.turnRateFast - DEFAULT_STEERING.turnRateSlow) * turnRateNow;
+    const smoothSpeed = lerp(240, 480, me.boostAlpha);
+    const maxTurn = lerp(DEFAULT_STEERING.turnRateSlow, DEFAULT_STEERING.turnRateFast, me.boostAlpha);
 
     ctx.font = "12px monospace";
     ctx.fillStyle = "#00ff88";
@@ -1204,8 +1204,8 @@ export class GameRenderer {
       `maxTurn: ${maxTurn.toFixed(2)} rad/s`,
       `drift: ${drift.toFixed(1)} px`,
       `correction: ${me.correctionFrames} frames`,
-      `boost: ${isBoosting}`,
-      `speed: ${speedT} px/s`,
+      `boostAlpha: ${me.boostAlpha.toFixed(2)}`,
+      `speed: ${smoothSpeed.toFixed(0)} px/s`,
     ];
     for (let i = 0; i < lines.length; i++) {
       ctx.fillText(lines[i], 10, 20 + i * 16);
@@ -1241,9 +1241,16 @@ export class GameRenderer {
       const isMe = id === this.mySessionId;
 
       if (isMe) {
-        // ═══ LOCAL PLAYER — predictive steering ═══
+        // ═══ LOCAL PLAYER — predictive steering with smooth boost ═══
         const isBoosting = this.touchBoosting || this.mouseDown;
-        const speedPxPerSec = isBoosting ? 480 : 240; // 8*30=240, 16*30=480
+
+        // Smooth boost transition (no instant toggle)
+        const boost: BoostState = { boostAlpha: snake.boostAlpha, wantsBoost: isBoosting };
+        updateBoost(boost, dt);
+        snake.boostAlpha = boost.boostAlpha;
+
+        // Speed derived from smoothed boost alpha
+        const speedPxPerSec = lerp(240, 480, snake.boostAlpha); // 8*30=240, 16*30=480
 
         // Build motion state for steering module
         const motion: SnakeMotionState = {
@@ -1253,17 +1260,15 @@ export class GameRenderer {
           maxSpeed: 480,
         };
 
-        // Desktop: target is screen center + mouse offset (angle from center)
-        // Mobile: target is head + direction from joystick angle
-        // Both produce a world-space target point for the steering function
-        const targetDist = 200; // virtual target distance for angle-only input
+        // Virtual target point from joystick/mouse angle
+        const targetDist = 200;
         const targetX = snake.headX + Math.cos(this.inputAngle) * targetDist;
         const targetY = snake.headY + Math.sin(this.inputAngle) * targetDist;
 
         updateHeadingFromTarget(motion, snake.headX, snake.headY, targetX, targetY, dt, DEFAULT_STEERING);
         snake.angle = motion.heading;
 
-        // Move forward at matched server speed
+        // Move forward at smoothed speed
         snake.headX += Math.cos(snake.angle) * speedPxPerSec * dt;
         snake.headY += Math.sin(snake.angle) * speedPxPerSec * dt;
 
@@ -1281,20 +1286,26 @@ export class GameRenderer {
         if (isBoosting && !this.wasBoosting) this.audio.startBoost();
         if (!isBoosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = isBoosting;
-        if (snake.boosting && this.boostFrameCounter % 3 === 0) {
+        if (snake.boostAlpha > 0.1 && this.boostFrameCounter % 3 === 0) {
           this.spawnBoostParticle(snake);
         }
 
       } else {
-        // ═══ OTHER SNAKES — turn-rate steering toward server angle ═══
+        // ═══ OTHER SNAKES — turn-rate steering with smooth boost ═══
+        // Smooth boost transition for others too
+        const otherBoost: BoostState = { boostAlpha: snake.boostAlpha, wantsBoost: snake.boosting };
+        updateBoost(otherBoost, dt);
+        snake.boostAlpha = otherBoost.boostAlpha;
+
         const delta = angleDiff(snake.serverAngle, snake.angle);
-        const maxStep = DEFAULT_STEERING.turnRateSlow * dt;
+        const otherSpeed = lerp(240, 480, snake.boostAlpha);
+        const otherTurnRate = lerp(DEFAULT_STEERING.turnRateSlow, DEFAULT_STEERING.turnRateFast, snake.boostAlpha);
+        const maxStep = otherTurnRate * dt;
         snake.angle += clamp(delta, -maxStep, maxStep);
 
-        // Move forward at server speed (converted to px/sec)
-        const speed = (snake.serverSpeed || 8) * 30;
-        snake.headX += Math.cos(snake.angle) * speed * dt;
-        snake.headY += Math.sin(snake.angle) * speed * dt;
+        // Move forward at smoothed speed
+        snake.headX += Math.cos(snake.angle) * otherSpeed * dt;
+        snake.headY += Math.sin(snake.angle) * otherSpeed * dt;
 
         // Server correction
         if (snake.correctionFrames > 0) {
@@ -1306,7 +1317,7 @@ export class GameRenderer {
           snake.correctionFrames--;
         }
 
-        if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
+        if (snake.boostAlpha > 0.1 && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
           this.spawnBoostParticle(snake);
         }
       }

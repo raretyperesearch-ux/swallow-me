@@ -71,6 +71,27 @@ export function updateHeadingFromTarget(
   s.heading += step;
 }
 
+// ─── Boost Smoothing ─────────────────────────────────
+
+export interface BoostState {
+  boostAlpha: number;   // 0..1
+  wantsBoost: boolean;  // raw input
+}
+
+export function updateBoost(
+  s: BoostState,
+  dtRaw: number,
+  dtCap = 0.05,
+  kUp = 18,
+  kDown = 12,
+): void {
+  const dt = Math.min(dtRaw, dtCap);
+  const target = s.wantsBoost ? 1 : 0;
+  const k = target > s.boostAlpha ? kUp : kDown;
+  const a = 1 - Math.exp(-k * dt);
+  s.boostAlpha = s.boostAlpha + (target - s.boostAlpha) * a;
+}
+
 // ─── Movement ────────────────────────────────────────
 
 export function moveHead(
