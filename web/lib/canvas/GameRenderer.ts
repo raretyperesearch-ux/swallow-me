@@ -299,8 +299,8 @@ export class GameRenderer {
   private arenaRadius: number = 5000;
   private bgPattern: CanvasPattern | null = null; // unused legacy
   private hexPattern: CanvasPattern | null = null;
-  private hexTileW: number = 0;
-  private hexTileH: number = 0;
+  private hexPatternCanvas: HTMLCanvasElement | null = null;
+  private bgBaseColor = '#050508';
 
   // Assets
   private bgImage: HTMLImageElement | null = null;
@@ -1489,9 +1489,7 @@ export class GameRenderer {
     const H = this.cssH;
     const ctx = this.ctx;
 
-    ctx.clearRect(0, 0, W, H);
-
-    // Hex background (pre-rendered pattern, scrolls with camera)
+    // Hex background (fills base color + pattern, no clearRect needed)
     this.drawHexBackground(ctx, W, H);
 
     this.drawBoundary(ctx, W, H);
@@ -1541,88 +1539,78 @@ export class GameRenderer {
 
   // ─── Hexagon Background Pattern ─────────────────
 
-  private initHexPattern() {
-    const hexR = 30; // hexagon radius
-    const sqrt3 = Math.sqrt(3);
-    // Unit cell for honeycomb tiling
-    const tileW = sqrt3 * hexR;
-    const tileH = hexR * 3;
-    this.hexTileW = tileW;
-    this.hexTileH = tileH;
+  private initHexPattern(): void {
+    const r = 30; // hex radius
+    const w = Math.sqrt(3) * r; // pointy-top hex width
+    const vStep = 1.5 * r;      // vertical distance between rows
 
-    const tile = document.createElement("canvas");
-    tile.width = Math.ceil(tileW);
-    tile.height = Math.ceil(tileH);
-    const tctx = tile.getContext("2d")!;
+    // Pattern tile that repeats cleanly across staggered rows
+    const tileW = w * 2;
+    const tileH = vStep * 2;
 
-    // Darkest background (visible in gaps between hexes)
-    tctx.fillStyle = "#050508";
-    tctx.fillRect(0, 0, tile.width, tile.height);
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(tileW);
+    c.height = Math.ceil(tileH);
+    const g = c.getContext('2d')!;
 
-    // Hex vertex helper
-    const hexVertex = (cx: number, cy: number, i: number) => {
-      const angle = (Math.PI / 3) * i - Math.PI / 6; // flat-top
-      return { x: cx + hexR * Math.cos(angle), y: cy + hexR * Math.sin(angle) };
-    };
+    g.fillStyle = this.bgBaseColor;
+    g.fillRect(0, 0, c.width, c.height);
 
-    const drawHex = (cx: number, cy: number) => {
-      // Get all 6 vertices
-      const verts = [];
-      for (let i = 0; i < 6; i++) verts.push(hexVertex(cx, cy, i));
-
-      // Fill hex base
-      tctx.beginPath();
-      tctx.moveTo(verts[0].x, verts[0].y);
-      for (let i = 1; i < 6; i++) tctx.lineTo(verts[i].x, verts[i].y);
-      tctx.closePath();
-      tctx.fillStyle = "#0a0a10";
-      tctx.fill();
-
-      // Inner concave gradient (dished look)
-      const innerGrad = tctx.createRadialGradient(cx, cy, 0, cx, cy, hexR * 0.9);
-      innerGrad.addColorStop(0, "rgba(255, 255, 255, 0.02)");
-      innerGrad.addColorStop(1, "rgba(0, 0, 0, 0.06)");
-      tctx.beginPath();
-      tctx.moveTo(verts[0].x, verts[0].y);
-      for (let i = 1; i < 6; i++) tctx.lineTo(verts[i].x, verts[i].y);
-      tctx.closePath();
-      tctx.fillStyle = innerGrad;
-      tctx.fill();
-
-      // Draw edges individually: top-left = highlight, bottom-right = shadow
-      tctx.lineWidth = 1;
+    const drawHex = (cx: number, cy: number, radius: number) => {
+      g.beginPath();
       for (let i = 0; i < 6; i++) {
-        const v1 = verts[i];
-        const v2 = verts[(i + 1) % 6];
-        tctx.beginPath();
-        tctx.moveTo(v1.x, v1.y);
-        tctx.lineTo(v2.x, v2.y);
-        // Edges 0,1,2 = top-left highlight; 3,4,5 = bottom-right shadow
-        if (i <= 2) {
-          tctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-        } else {
-          tctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
-        }
-        tctx.stroke();
+        const a = i * (Math.PI / 3) - Math.PI / 6;
+        const x = cx + radius * Math.cos(a);
+        const y = cy + radius * Math.sin(a);
+        if (i === 0) g.moveTo(x, y);
+        else g.lineTo(x, y);
       }
+      g.closePath();
     };
 
-    // Two hexagons per unit cell for honeycomb tiling
-    drawHex(0, hexR);
-    drawHex(tileW / 2, hexR * 2.5);
+    // 2x2 staggered centers to guarantee seamless repeat
+    const centers: Array<[number, number]> = [
+      [w * 0.5, r],
+      [w * 1.5, r],
+      [w * 1.0, r + vStep],
+      [w * 2.0, r + vStep],
+    ];
 
-    this.hexPattern = this.ctx.createPattern(tile, "repeat");
+    for (const [cx, cy] of centers) {
+      drawHex(cx, cy, r - 1);
+      g.fillStyle = '#0a0a0f';
+      g.fill();
+
+      drawHex(cx, cy, r - 1);
+      g.strokeStyle = 'rgba(255,255,255,0.03)';
+      g.lineWidth = 1;
+      g.stroke();
+    }
+
+    this.hexPatternCanvas = c;
+    this.hexPattern = this.ctx.createPattern(c, 'repeat');
   }
 
-  private drawHexBackground(ctx: CanvasRenderingContext2D, W: number, H: number) {
-    if (!this.hexPattern) return;
+  private drawHexBackground(ctx: CanvasRenderingContext2D, W: number, H: number): void {
     ctx.save();
-    // Scroll pattern with camera (world-space scrolling)
-    const ox = (-this.camX * this.zoom) % this.hexTileW;
-    const oy = (-this.camY * this.zoom) % this.hexTileH;
-    ctx.translate(ox, oy);
+    ctx.fillStyle = this.bgBaseColor;
+    ctx.fillRect(0, 0, W, H);
+
+    if (!this.hexPattern || !this.hexPatternCanvas) {
+      ctx.restore();
+      return;
+    }
+
+    // Wrap camera offset by tile size to avoid precision drift over long sessions
+    const tw = this.hexPatternCanvas.width;
+    const th = this.hexPatternCanvas.height;
+    const ox = ((-this.camX * this.zoom) % tw + tw) % tw;
+    const oy = ((-this.camY * this.zoom) % th + th) % th;
+
+    ctx.translate(ox - tw, oy - th);
     ctx.fillStyle = this.hexPattern;
-    ctx.fillRect(-this.hexTileW, -this.hexTileH, W + this.hexTileW * 2, H + this.hexTileH * 2);
+    ctx.fillRect(0, 0, W + tw * 2, H + th * 2);
+
     ctx.restore();
   }
 
