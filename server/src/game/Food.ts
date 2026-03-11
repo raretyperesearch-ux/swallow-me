@@ -24,26 +24,33 @@ export function spawnRandomFood(arenaRadius: number): ServerFood {
 }
 
 /**
- * Spawn death food distributed along a snake's body segments.
- * Each orb spawns at a segment position + small random offset,
- * tracing the ghost of the dead snake's shape.
+ * Spawn death food distributed evenly along a snake's body segments.
+ * Traces the ghost shape of the dead snake in food orbs.
  */
-export function spawnDeathFood(
+export function spawnDeathFoodAlongBody(
   segments: { x: number; y: number }[],
-  maxCount: number
+  count: number
 ): ServerFood[] {
   const foods: ServerFood[] = [];
-  // Cap at 40 for very long snakes to avoid flooding
-  const count = Math.min(maxCount, 40);
-  const stride = Math.max(1, Math.floor(segments.length / count));
 
-  for (let i = 0; i < segments.length && foods.length < count; i += stride) {
+  if (segments.length === 0) return foods;
+
+  // Distribute orbs evenly along the body
+  const step = Math.max(1, Math.floor(segments.length / count));
+
+  for (let i = 0; i < segments.length && foods.length < count; i += step) {
     const seg = segments[i];
-    const offsetX = (Math.random() - 0.5) * 20; // ±10 units
-    const offsetY = (Math.random() - 0.5) * 20;
     foods.push(
-      createFood(seg.x + offsetX, seg.y + offsetY, 2)
+      createFood(
+        seg.x + (Math.random() - 0.5) * 10, // tiny random offset
+        seg.y + (Math.random() - 0.5) * 10,
+        2 // death food size
+      )
     );
   }
+
   return foods;
 }
+
+// Keep old name as alias for backwards compat
+export const spawnDeathFood = spawnDeathFoodAlongBody;

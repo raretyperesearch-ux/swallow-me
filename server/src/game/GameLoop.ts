@@ -107,7 +107,7 @@ export function runGameTick(
     if (snake && food) {
       let growAmount: number;
       if (food.size === 2) {
-        growAmount = GAME_CONFIG.FOOD_VALUE * 3; // death food = 3x
+        growAmount = GAME_CONFIG.FOOD_VALUE * 1.5; // death food = 1.5x
       } else if (boostFoodOwners.has(eat.foodId)) {
         growAmount = GAME_CONFIG.FOOD_VALUE * 0.3; // boost trail = 0.3x
       } else {
