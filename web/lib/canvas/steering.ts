@@ -64,7 +64,10 @@ export function updateHeadingFromTarget(
   const speedT = clamp01(
     (s.speed - s.minSpeed) / (s.maxSpeed - s.minSpeed || 1),
   );
-  const maxTurnRate = lerp(cfg.turnRateSlow, cfg.turnRateFast, speedT);
+  let maxTurnRate = lerp(cfg.turnRateSlow, cfg.turnRateFast, speedT);
+
+  // Large angle delta (>90°): boost turn rate 1.5x for fast 360s
+  if (Math.abs(delta) > Math.PI / 2) maxTurnRate *= 1.5;
 
   const maxStep = maxTurnRate * dt;
   const step = clamp(delta, -maxStep, +maxStep);

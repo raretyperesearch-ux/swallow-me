@@ -357,6 +357,10 @@ export class GameRenderer {
   private shakeY: number = 0;
   private shakeLife: number = 0; // seconds remaining
 
+  // Boost speed lines (pooled)
+  private speedLines: { active: boolean; x: number; y: number; angle: number; length: number; life: number; maxLife: number }[] = [];
+  private speedLineTimer: number = 0;
+
   // Low-end device detection
   private isLowEnd: boolean = false;
 
@@ -459,6 +463,11 @@ export class GameRenderer {
 
     this.resizeCanvas();
     this.setupInput();
+
+    // Pre-allocate speed line pool
+    for (let i = 0; i < 20; i++) {
+      this.speedLines.push({ active: false, x: 0, y: 0, angle: 0, length: 0, life: 0, maxLife: 0.3 });
+    }
 
     // Pre-render food glow circles (one per color, cached forever)
     // Mobile gets smaller glow radius for perf, desktop gets full size
@@ -1355,8 +1364,15 @@ export class GameRenderer {
     this.updatePool(this.trailPool, Math.pow(0.02, dt), dt * 2);
     this.updateEatPopups();
 
-    // Screen shake decay
-    if (this.shakeLife > 0) {
+    // Screen shake decay — suppress during boost
+    const mySnake = this.localSnakes.get(this.mySessionId);
+    const isBoosting = this.touchBoosting || this.mouseDown;
+    if (isBoosting) {
+      // No shake while boosting — speed lines provide the speed feeling
+      this.shakeLife = 0;
+      this.shakeX = 0;
+      this.shakeY = 0;
+    } else if (this.shakeLife > 0) {
       this.shakeLife -= dt;
       const intensity = Math.max(0, this.shakeLife / 0.2) * 5;
       this.shakeX = (Math.random() - 0.5) * 2 * intensity;
@@ -1364,6 +1380,32 @@ export class GameRenderer {
     } else {
       this.shakeX = 0;
       this.shakeY = 0;
+    }
+
+    // Speed line spawning during boost
+    if (mySnake && mySnake.alive && mySnake.boostAlpha > 0.3) {
+      this.speedLineTimer += dt;
+      if (this.speedLineTimer > 2 / 60) { // ~1 line every 2 frames
+        this.speedLineTimer = 0;
+        for (const sl of this.speedLines) {
+          if (sl.active) continue;
+          sl.active = true;
+          sl.x = mySnake.headX + (Math.random() - 0.5) * 40;
+          sl.y = mySnake.headY + (Math.random() - 0.5) * 40;
+          sl.angle = mySnake.angle + (Math.random() - 0.5) * (Math.PI / 6); // ±15°
+          sl.length = 60 + Math.random() * 60; // 60-120 px
+          sl.life = 0.3;
+          sl.maxLife = 0.3;
+          break;
+        }
+      }
+    }
+
+    // Update speed lines
+    for (const sl of this.speedLines) {
+      if (!sl.active) continue;
+      sl.life -= dt;
+      if (sl.life <= 0) sl.active = false;
     }
 
     // Death animation countdown
@@ -1390,23 +1432,23 @@ export class GameRenderer {
 
     // Camera — smooth follow + dynamic zoom (dt-based)
     const camLerp = 1 - Math.pow(0.0001, dt);
-    const me = this.localSnakes.get(this.mySessionId);
-    if (this.deathAnimating || (this.deathAnimData === null && !me?.alive && this.deathCamX !== 0)) {
+    const camMe = this.localSnakes.get(this.mySessionId);
+    if (this.deathAnimating || (this.deathAnimData === null && !camMe?.alive && this.deathCamX !== 0)) {
       // Hold camera at death position with shake
       this.camX = this.deathCamX + this.shakeX;
       this.camY = this.deathCamY + this.shakeY;
-    } else if (me && me.alive) {
-      this.camX += (me.headX - this.camX) * camLerp + this.shakeX;
-      this.camY += (me.headY - this.camY) * camLerp + this.shakeY;
+    } else if (camMe && camMe.alive) {
+      this.camX += (camMe.headX - this.camX) * camLerp + this.shakeX;
+      this.camY += (camMe.headY - this.camY) * camLerp + this.shakeY;
 
       // Zoom out as snake grows: length 40→1.0, length 200→0.7, length 500→0.5
-      const len = me.serverLength || 40;
+      const len = camMe.serverLength || 40;
       this.targetZoom = Math.max(0.3, Math.min(0.6, 0.6 - (len - 40) / 500));
       this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
 
       // Trail: spawn every frame, bigger on mobile
-      const trailColor = SKIN_PATTERNS[me.skinId % SKIN_PATTERNS.length].primary;
-      const seg1 = me.segments[1];
+      const trailColor = SKIN_PATTERNS[camMe.skinId % SKIN_PATTERNS.length].primary;
+      const seg1 = camMe.segments[1];
       if (seg1) {
         const trailSizeMin = this.isMobile ? 6 : 4;
         const trailSizeMax = this.isMobile ? 12 : 8;
@@ -1414,15 +1456,15 @@ export class GameRenderer {
       }
 
       // Track max length for boost energy arc
-      if (me.serverLength > this.maxLengthReached) {
-        this.maxLengthReached = me.serverLength;
+      if (camMe.serverLength > this.maxLengthReached) {
+        this.maxLengthReached = camMe.serverLength;
       }
 
       this.onStatsUpdate?.({
-        kills: me.kills,
-        value: me.valueUsdc / 1_000_000,
+        kills: camMe.kills,
+        value: camMe.valueUsdc / 1_000_000,
         alive: this.room.state.aliveCount || 0,
-        length: me.serverLength,
+        length: camMe.serverLength,
         muted: this.audio.muted,
       });
     }
@@ -1474,6 +1516,15 @@ export class GameRenderer {
         this.drawSnake(ctx, snake, W, H, id === this.mySessionId);
         this.drawSnakeName(ctx, snake, id, W, H);
       }
+    }
+
+    // Boost speed lines (behind death particles)
+    this.drawSpeedLines(ctx, W, H);
+
+    // Boost head glow (only for local player)
+    const meSnake = this.localSnakes.get(this.mySessionId);
+    if (meSnake && meSnake.alive && meSnake.boostAlpha > 0.1) {
+      this.drawBoostHeadGlow(ctx, meSnake, W, H);
     }
 
     // Death explosion particles (additive for impact)
@@ -1579,6 +1630,53 @@ export class GameRenderer {
 
   private toScreenX(wx: number): number { return (wx - this.camX) * this.zoom + this.cssW / 2; }
   private toScreenY(wy: number): number { return (wy - this.camY) * this.zoom + this.cssH / 2; }
+
+  // ─── Boost Speed Lines ───────────────────────────
+
+  private drawSpeedLines(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+    for (const sl of this.speedLines) {
+      if (!sl.active) continue;
+      const t = sl.life / sl.maxLife; // 1→0
+
+      // World to screen
+      const sx = (sl.x - this.camX) * this.zoom + W / 2;
+      const sy = (sl.y - this.camY) * this.zoom + H / 2;
+      if (sx < -200 || sx > W + 200 || sy < -200 || sy > H + 200) continue;
+
+      const len = sl.length * this.zoom;
+      const ex = sx - Math.cos(sl.angle) * len; // lines trail behind
+      const ey = sy - Math.sin(sl.angle) * len;
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.strokeStyle = `rgba(255, 255, 255, ${0.15 * t})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  // ─── Boost Head Glow ────────────────────────────
+
+  private drawBoostHeadGlow(ctx: CanvasRenderingContext2D, snake: LocalSnake, W: number, H: number): void {
+    const hx = (snake.headX - this.camX) * this.zoom + W / 2;
+    const hy = (snake.headY - this.camY) * this.zoom + H / 2;
+    const bodyR = getBodyRadius(snake.serverLength || 40) * this.zoom;
+    const glowR = bodyR * 3;
+
+    // Alpha pulses with sin
+    const pulseAlpha = 0.1 + 0.15 * Math.abs(Math.sin(performance.now() / 1000 * 8));
+    const alpha = pulseAlpha * snake.boostAlpha;
+
+    const grad = ctx.createRadialGradient(hx, hy, bodyR * 0.5, hx, hy, glowR);
+    grad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+    grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+
+    ctx.beginPath();
+    ctx.arc(hx, hy, glowR, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
 
   // ─── Snake Drawing ────────────────────────────────
 
