@@ -1302,16 +1302,11 @@ export class GameRenderer {
           // Normal non-boost: no particles
         }
       } else {
-        // Other players: lerp toward server position (dt-based)
-        snake.headX += (snake.serverHeadX - snake.headX) * otherBlend;
-        snake.headY += (snake.serverHeadY - snake.headY) * otherBlend;
-
-        // Smooth angle for others
-        const targetAngle = snake.serverAngle;
-        let angleDiff = targetAngle - snake.angle;
-        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        snake.angle += angleDiff * otherTurnLerp;
+        // Other players: show EXACTLY where the server says they are
+        // No prediction, no interpolation — accuracy over smoothness
+        snake.headX = snake.serverHeadX;
+        snake.headY = snake.serverHeadY;
+        snake.angle = snake.serverAngle;
 
         // Boost particles for others too (visible)
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
