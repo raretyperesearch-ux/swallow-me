@@ -1263,21 +1263,24 @@ export class GameRenderer {
 
       // --- CLIENT-SIDE PREDICTION ---
       if (isMe) {
-        // Turn rate matches server: min turn radius scales with snake length
-        const segCount = snake.segments ? snake.segments.length : 40;
-        const minRadius = 30 + segCount * 0.15;
-        const isBoosting = this.touchBoosting || this.mouseDown;
-        const currentSpeed = isBoosting ? 16.0 : 8.0;
-        const maxTurnRate = currentSpeed / minRadius;
-        const effectiveTurnRate = Math.min(0.15, maxTurnRate);
-
+        // Smooth turning — delta-time based, matches server turn radius scaling
         let angleDiff = this.inputAngle - snake.angle;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-        if (Math.abs(angleDiff) > effectiveTurnRate) {
-          snake.angle += Math.sign(angleDiff) * effectiveTurnRate;
+
+        // Server turn rate scales with snake size
+        const snakeLen = snake.serverLength || 40;
+        const minRadius = 30 + snakeLen * 0.15;
+        const isBoosting = this.touchBoosting || this.mouseDown;
+        const currentSpeed = isBoosting ? 16.0 : 8.0;
+        const maxTurnPerSec = currentSpeed / minRadius; // radians per second
+
+        // Apply turn rate capped by max, scaled by dt (frame-rate independent)
+        const maxTurnThisFrame = maxTurnPerSec * dt * 60; // normalize to 60fps
+        if (Math.abs(angleDiff) > maxTurnThisFrame) {
+          snake.angle += Math.sign(angleDiff) * maxTurnThisFrame;
         } else {
-          snake.angle = this.inputAngle;
+          snake.angle += angleDiff * 0.5; // ease into final angle when close
         }
 
         // Instant boost on, smooth off
