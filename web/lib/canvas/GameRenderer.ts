@@ -1277,8 +1277,9 @@ export class GameRenderer {
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
         snake.angle += angleDiff * turnLerp;
 
-        // Smooth speed transition instead of instant switch
-        const targetSpeed = snake.boosting ? 16.0 : 8.0;
+        // Use LOCAL input for instant feedback, not server state
+        const isBoosting = this.touchBoosting || this.mouseDown;
+        const targetSpeed = isBoosting ? 16.0 : 8.0;
         if (!snake._currentSpeed) snake._currentSpeed = 8.0;
         snake._currentSpeed += (targetSpeed - snake._currentSpeed) * 0.2;
         const moveDist = snake._currentSpeed * dt * 60; // normalize to 60fps baseline
@@ -1289,13 +1290,13 @@ export class GameRenderer {
         snake.headX += (snake.serverHeadX - snake.headX) * serverBlend;
         snake.headY += (snake.serverHeadY - snake.headY) * serverBlend;
 
-        // Boost sound
-        if (snake.boosting && !this.wasBoosting) this.audio.startBoost();
-        if (!snake.boosting && this.wasBoosting) this.audio.stopBoost();
-        this.wasBoosting = snake.boosting;
+        // Boost sound — uses local input for instant response
+        if (isBoosting && !this.wasBoosting) this.audio.startBoost();
+        if (!isBoosting && this.wasBoosting) this.audio.stopBoost();
+        this.wasBoosting = isBoosting;
 
         // Boost particles: when boosting, emit more (whoosh trail)
-        if (snake.boosting) {
+        if (isBoosting) {
           if (this.boostFrameCounter % 2 === 0) {
             this.spawnBoostParticle(snake);
             // Extra whoosh: 1.5x size particles
@@ -1645,18 +1646,18 @@ export class GameRenderer {
     }
     ctx.fill();
 
-    // --- PASS 3: Highlight strip (3D tube illusion) ---
-    const highlightColor = lightenColor(snakeColor, 0.25);
+    // --- PASS 3: Center highlight for 3D tube illusion (no directional offset) ---
+    const highlightColor = lightenColor(snakeColor, 0.3);
     ctx.fillStyle = highlightColor;
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.25;
     ctx.beginPath();
     for (let i = segCount - 1; i >= 0; i--) {
       const seg = snake.segments[i];
       if (!this.isInView(seg.x, seg.y, 200)) continue;
       const sx = this.toScreenX(seg.x);
       const sy = this.toScreenY(seg.y);
-      ctx.moveTo(sx - bodyRadius * 0.15 + bodyRadius * 0.5, sy - bodyRadius * 0.3);
-      ctx.arc(sx - bodyRadius * 0.15, sy - bodyRadius * 0.3, bodyRadius * 0.5, 0, Math.PI * 2);
+      ctx.moveTo(sx + bodyRadius * 0.4, sy);
+      ctx.arc(sx, sy, bodyRadius * 0.4, 0, Math.PI * 2);
     }
     ctx.fill();
     ctx.globalAlpha = 1.0;
