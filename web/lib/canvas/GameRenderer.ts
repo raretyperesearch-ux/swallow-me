@@ -20,6 +20,10 @@ interface LocalSnake {
   isBot: boolean;
   kills: number;
   valueUsdc: number;
+  // Server correction — applied gradually, NOT per-frame blend
+  correctionX: number;
+  correctionY: number;
+  correctionFrames: number;
 }
 
 // Unified pooled particle — pre-allocated, never created/destroyed in hot path
@@ -550,11 +554,25 @@ export class GameRenderer {
         isBot: snake.isBot || false,
         kills: snake.kills || 0,
         valueUsdc: snake.valueUsdc || 0,
+        correctionX: 0,
+        correctionY: 0,
+        correctionFrames: 0,
       });
 
       snake.onChange(() => {
         const local = this.localSnakes.get(key);
         if (!local) return;
+
+        // Calculate how far off our prediction was
+        const errorX = snake.headX - local.headX;
+        const errorY = snake.headY - local.headY;
+
+        // Spread this correction over 5 frames (not instant, not every frame)
+        local.correctionX = errorX;
+        local.correctionY = errorY;
+        local.correctionFrames = 5;
+
+        // Update server values for reference
         local.serverHeadX = snake.headX;
         local.serverHeadY = snake.headY;
         local.serverAngle = snake.angle;
@@ -1247,14 +1265,30 @@ export class GameRenderer {
 
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
+      const isMe = id === this.mySessionId;
 
-      if (id === this.mySessionId) {
-        // ANGLE: instant from joystick — zero lag on direction
+      if (isMe) {
+        // ═══ LOCAL PLAYER ═══
+        // ANGLE: instant from joystick input — zero lag
         snake.angle = this.inputAngle;
 
-        // POSITION: fast lerp to server — 0.5 = reaches target in 2 frames
-        snake.headX += (snake.serverHeadX - snake.headX) * 0.5;
-        snake.headY += (snake.serverHeadY - snake.headY) * 0.5;
+        // SPEED: use server speed (updated via onChange) — instant for boost
+        // because server processes boost within one tick
+        const speed = snake.serverSpeed || 8;
+
+        // MOVE: forward at server speed, NO blend toward server position
+        snake.headX += Math.cos(snake.angle) * speed;
+        snake.headY += Math.sin(snake.angle) * speed;
+
+        // CORRECTION: apply gradually (only if onChange set a correction)
+        if (snake.correctionFrames > 0) {
+          const fraction = 1 / snake.correctionFrames;
+          snake.headX += snake.correctionX * fraction;
+          snake.headY += snake.correctionY * fraction;
+          snake.correctionX -= snake.correctionX * fraction;
+          snake.correctionY -= snake.correctionY * fraction;
+          snake.correctionFrames--;
+        }
 
         // BOOST: sound and particles
         const isBoosting = this.touchBoosting || this.mouseDown;
@@ -1264,22 +1298,46 @@ export class GameRenderer {
         if (snake.boosting && this.boostFrameCounter % 3 === 0) {
           this.spawnBoostParticle(snake);
         }
+
       } else {
-        // OTHER SNAKES: same fast lerp
-        snake.headX += (snake.serverHeadX - snake.headX) * 0.5;
-        snake.headY += (snake.serverHeadY - snake.headY) * 0.5;
-        snake.angle += (function() {
-          let d = snake.serverAngle - snake.angle;
-          while (d > Math.PI) d -= Math.PI * 2;
-          while (d < -Math.PI) d += Math.PI * 2;
-          return d * 0.5;
-        })();
+        // ═══ OTHER SNAKES ═══
+        // Same correction-based approach — no per-frame blend
+        const speed = snake.serverSpeed || 8;
+        snake.headX += Math.cos(snake.angle) * speed;
+        snake.headY += Math.sin(snake.angle) * speed;
+
+        // Apply angle from server with smooth step
+        let ad = snake.serverAngle - snake.angle;
+        while (ad > Math.PI) ad -= Math.PI * 2;
+        while (ad < -Math.PI) ad += Math.PI * 2;
+        snake.angle += ad * 0.3;
+
+        // Apply correction from onChange
+        if (snake.correctionFrames > 0) {
+          const fraction = 1 / snake.correctionFrames;
+          snake.headX += snake.correctionX * fraction;
+          snake.headY += snake.correctionY * fraction;
+          snake.correctionX -= snake.correctionX * fraction;
+          snake.correctionY -= snake.correctionY * fraction;
+          snake.correctionFrames--;
+        }
+
         if (snake.boosting && this.boostFrameCounter % 3 === 0 && this.isInView(snake.headX, snake.headY, 300)) {
           this.spawnBoostParticle(snake);
         }
       }
 
-      // SEGMENTS: follow the head
+      // ═══ SAFETY: prevent runaway drift ═══
+      // If somehow we're >200 units from server, hard snap
+      const dx = snake.serverHeadX - snake.headX;
+      const dy = snake.serverHeadY - snake.headY;
+      if (dx * dx + dy * dy > 40000) {
+        snake.headX = snake.serverHeadX;
+        snake.headY = snake.serverHeadY;
+        snake.correctionFrames = 0;
+      }
+
+      // ═══ CHAIN CONSTRAINT ═══
       if (snake.segments.length > 0) {
         snake.segments[0].x = snake.headX;
         snake.segments[0].y = snake.headY;
@@ -1287,11 +1345,11 @@ export class GameRenderer {
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
-        const dx = curr.x - prev.x;
-        const dy = curr.y - prev.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const cdx = curr.x - prev.x;
+        const cdy = curr.y - prev.y;
+        const dist = Math.sqrt(cdx * cdx + cdy * cdy);
         if (dist > 4) {
-          const a = Math.atan2(dy, dx);
+          const a = Math.atan2(cdy, cdx);
           curr.x = prev.x + Math.cos(a) * 4;
           curr.y = prev.y + Math.sin(a) * 4;
         }
