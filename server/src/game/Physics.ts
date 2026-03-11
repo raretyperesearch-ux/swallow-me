@@ -28,6 +28,32 @@ function getBodyRadius(segmentCount: number): number {
   return 6 + Math.pow(Math.max(1, segmentCount - 20), 0.35) * 3;
 }
 
+// Collision epsilon: small forgiveness margin to suppress phantom kills from float noise
+const COLLISION_EPSILON = 2.0;
+
+// Spawn grace period: ignore collisions for this long after spawning
+const SPAWN_GRACE_MS = 2000;
+
+/** Squared distance from point P to closest point on line segment AB (swept collision) */
+function pointToSegmentDistSq(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const ab2 = abx * abx + aby * aby;
+  if (ab2 === 0) return apx * apx + apy * apy;
+  const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / ab2));
+  const cx = ax + t * abx;
+  const cy = ay + t * aby;
+  const dx = px - cx;
+  const dy = py - cy;
+  return dx * dx + dy * dy;
+}
+
 /**
  * Ray-casting containment test: is point (px,py) inside the polygon
  * formed by a snake's body segments? Uses crossing-number algorithm.
@@ -78,27 +104,32 @@ export function checkSnakeCollisions(
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
 
-  // HEAD vs BODY: brute force — dynamic radius, no multiplier
+  const now = Date.now();
+
+  // HEAD vs BODY: swept capsule check (prevHead→head vs body segments)
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
+    // Spawn grace: newly spawned snakes can't be killed
+    if (now - snake.spawnTime < SPAWN_GRACE_MS) continue;
 
-    const headX = snake.headX;
-    const headY = snake.headY;
     const headRadius = getBodyRadius(snake.segments.length);
 
     for (const [otherId, other] of snakes) {
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
       const otherBodyRadius = getBodyRadius(other.segments.length);
-      const killDist = headRadius + otherBodyRadius;
+      // Epsilon forgiveness: subtract small margin to prevent phantom kills
+      const killDist = headRadius + otherBodyRadius - COLLISION_EPSILON;
       const killDistSq = killDist * killDist;
 
-      // Check against EVERY body segment starting at index 1 (skip 0 which is the head position)
+      // Swept check: test body segment point against line from prevHead→head
       for (let i = 1; i < other.segments.length; i++) {
         const seg = other.segments[i];
-        const dx = headX - seg.x;
-        const dy = headY - seg.y;
-        const dSq = dx * dx + dy * dy;
+        const dSq = pointToSegmentDistSq(
+          seg.x, seg.y,
+          snake.prevHeadX, snake.prevHeadY,
+          snake.headX, snake.headY,
+        );
 
         if (dSq < killDistSq) {
           kills.push({
@@ -107,7 +138,7 @@ export function checkSnakeCollisions(
             victimValue: snake.valueUsdc,
             victimName: snake.name,
             killerName: other.name,
-            timestamp: Date.now(),
+            timestamp: now,
           });
           alreadyDead.add(id);
           break;
@@ -119,7 +150,7 @@ export function checkSnakeCollisions(
 
   // Head-to-head: bigger snake wins, same size = both die
   const heads = Array.from(snakes.entries()).filter(
-    ([id, s]) => s.alive && !alreadyDead.has(id)
+    ([id, s]) => s.alive && !alreadyDead.has(id) && now - s.spawnTime >= SPAWN_GRACE_MS
   );
   for (let i = 0; i < heads.length; i++) {
     for (let j = i + 1; j < heads.length; j++) {
@@ -127,18 +158,18 @@ export function checkSnakeCollisions(
       const [idB, b] = heads[j];
       if (alreadyDead.has(idA) || alreadyDead.has(idB)) continue;
 
-      const headCollDist = getBodyRadius(a.segments.length) + getBodyRadius(b.segments.length);
+      const headCollDist = getBodyRadius(a.segments.length) + getBodyRadius(b.segments.length) - COLLISION_EPSILON;
       const dSq = distanceSq(a.headX, a.headY, b.headX, b.headY);
       if (dSq < headCollDist * headCollDist) {
         if (a.length > b.length * 1.1) {
-          kills.push({ killer: idA, victim: idB, victimValue: b.valueUsdc, victimName: b.name, killerName: a.name, timestamp: Date.now() });
+          kills.push({ killer: idA, victim: idB, victimValue: b.valueUsdc, victimName: b.name, killerName: a.name, timestamp: now });
           alreadyDead.add(idB);
         } else if (b.length > a.length * 1.1) {
-          kills.push({ killer: idB, victim: idA, victimValue: a.valueUsdc, victimName: a.name, killerName: b.name, timestamp: Date.now() });
+          kills.push({ killer: idB, victim: idA, victimValue: a.valueUsdc, victimName: a.name, killerName: b.name, timestamp: now });
           alreadyDead.add(idA);
         } else {
-          kills.push({ killer: null, victim: idA, victimValue: a.valueUsdc, victimName: a.name, killerName: "", timestamp: Date.now() });
-          kills.push({ killer: null, victim: idB, victimValue: b.valueUsdc, victimName: b.name, killerName: "", timestamp: Date.now() });
+          kills.push({ killer: null, victim: idA, victimValue: a.valueUsdc, victimName: a.name, killerName: "", timestamp: now });
+          kills.push({ killer: null, victim: idB, victimValue: b.valueUsdc, victimName: b.name, killerName: "", timestamp: now });
           alreadyDead.add(idA);
           alreadyDead.add(idB);
         }
@@ -158,8 +189,10 @@ export function checkBoundaryCollisions(
 ): KillEvent[] {
   const kills: KillEvent[] = [];
 
+  const now = Date.now();
   for (const [id, snake] of snakes) {
     if (!snake.alive) continue;
+    if (now - snake.spawnTime < SPAWN_GRACE_MS) continue;
 
     const distFromCenter = Math.sqrt(
       snake.headX * snake.headX + snake.headY * snake.headY
@@ -172,7 +205,7 @@ export function checkBoundaryCollisions(
         victimValue: snake.valueUsdc,
         victimName: snake.name,
         killerName: "wall",
-        timestamp: Date.now(),
+        timestamp: now,
       });
     }
   }

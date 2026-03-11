@@ -1,5 +1,8 @@
 import * as Colyseus from "colyseus.js";
 import type { VoicePeer } from "../voice/VoiceChat";
+import { angleDiff, clamp, DEFAULT_STEERING, updateHeadingFromTarget, chainConstrain, getBodyRadius } from "./steering";
+import type { SnakeMotionState } from "./steering";
+import { Joystick } from "./joystick";
 
 // ─── Types ──────────────────────────────────────────
 
@@ -368,22 +371,16 @@ export class GameRenderer {
   private isMobile: boolean = false;
   private isTouchDevice: boolean = false;
 
-  // Mobile joystick — STATIC always-visible at bottom-left
-  private joystickActive: boolean = false;
-  private joystickCenterX: number = 0;
-  private joystickCenterY: number = 0;
-  private joystickKnobX: number = 0;
-  private joystickKnobY: number = 0;
-  private joystickTouchId: number | null = null;
-
-  private readonly JOYSTICK_RADIUS = 70;
-  private readonly KNOB_RADIUS = 28;
-  private readonly DEAD_ZONE = 8;
-  private readonly JOYSTICK_HITBOX = 150;
-
-  // Boost button (bottom-right, mobile)
-  private boostTouchId: number | null = null;
+  // Joystick module (mobile only)
+  private joystick: Joystick | null = null;
   private touchBoosting: boolean = false;
+
+  // Fixed-step simulation accumulator
+  private simAccumulator: number = 0;
+  private readonly SIM_DT: number = 1 / 60;
+
+  // Debug overlay toggle
+  private debugMode: boolean = false;
 
   // Boost energy tracking
   private maxLengthReached: number = 40;
@@ -443,6 +440,11 @@ export class GameRenderer {
     this.isLowEnd = (navigator.hardwareConcurrency || 4) <= 2;
     if (this.isLowEnd) {
       this.targetFrameInterval = 1000 / 30;
+    }
+
+    // Initialize joystick for touch devices
+    if (this.isTouchDevice) {
+      this.joystick = new Joystick();
     }
 
     this.canvas = document.createElement("canvas");
@@ -867,160 +869,41 @@ export class GameRenderer {
       }
     });
 
-    // --- TOUCH INPUT (multi-touch: joystick + boost button) ---
-    if (this.isTouchDevice) {
+    // --- TOUCH INPUT (delegated to Joystick module) ---
+    if (this.isTouchDevice && this.joystick) {
+      const js = this.joystick;
       this.canvas.addEventListener("touchstart", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        for (let i = 0; i < e.changedTouches.length; i++) {
-          const touch = e.changedTouches[i];
-          const tx = touch.clientX;
-          const ty = touch.clientY;
-
-          // Voice panel tap (top-left area)
-          if (this.handleVoicePanelClick(tx, ty)) continue;
-
-          const halfW = this.cssW * 0.5;
-
-          // Right half of screen = boost zone
-          if (tx >= halfW && this.boostTouchId === null) {
-            this.boostTouchId = touch.identifier;
-            this.touchBoosting = true;
-            continue;
-          }
-
-          // Left half of screen = joystick zone
-          if (tx < halfW && this.joystickTouchId === null) {
-            // Check if touch is within hitbox of the joystick center
-            const jc = this.getJoystickCenter();
-            const jcx = jc.x;
-            const jcy = jc.y;
-            const jdx = tx - jcx;
-            const jdy = ty - jcy;
-            const jDist = Math.sqrt(jdx * jdx + jdy * jdy);
-            if (jDist < this.JOYSTICK_HITBOX) {
-              this.joystickTouchId = touch.identifier;
-              this.joystickActive = true;
-              this.handleJoystickMove(tx, ty);
-            }
-          }
-        }
+        js.onTouchStart(e.changedTouches, this.cssW, this.cssH, (x, y) => this.handleVoicePanelClick(x, y));
+        this.touchBoosting = js.boosting;
       }, { passive: false });
 
       this.canvas.addEventListener("touchmove", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        for (let i = 0; i < e.changedTouches.length; i++) {
-          const touch = e.changedTouches[i];
-          if (touch.identifier === this.joystickTouchId) {
-            this.handleJoystickMove(touch.clientX, touch.clientY);
-          }
-        }
+        js.onTouchMove(e.changedTouches, this.cssW, this.cssH);
       }, { passive: false });
 
       this.canvas.addEventListener("touchend", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        for (let i = 0; i < e.changedTouches.length; i++) {
-          const tid = e.changedTouches[i].identifier;
-          if (tid === this.joystickTouchId) {
-            this.joystickActive = false;
-            this.joystickTouchId = null;
-            // Snap knob back to center
-            const jcEnd = this.getJoystickCenter();
-            this.joystickKnobX = jcEnd.x;
-            this.joystickKnobY = jcEnd.y;
-          }
-          if (tid === this.boostTouchId) {
-            this.boostTouchId = null;
-            this.touchBoosting = false;
-          }
-        }
+        js.onTouchEnd(e.changedTouches, this.cssW, this.cssH);
+        this.touchBoosting = js.boosting;
       }, { passive: false });
 
       this.canvas.addEventListener("touchcancel", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this.joystickActive = false;
-        this.joystickTouchId = null;
-        const jcCancel = this.getJoystickCenter();
-        this.joystickKnobX = jcCancel.x;
-        this.joystickKnobY = jcCancel.y;
-        this.boostTouchId = null;
-        this.touchBoosting = false;
+        js.onTouchCancel(this.cssW, this.cssH);
+        this.touchBoosting = js.boosting;
       }, { passive: false });
     }
-  }
 
-  // ─── Joystick Logic (no separate canvas) ──────────
-
-  private getJoystickCenter(): { x: number; y: number; outerR: number; knobR: number } {
-    const isLandscape = this.cssW > this.cssH;
-    if (isLandscape) {
-      return { x: 90, y: this.cssH * 0.45, outerR: 55, knobR: 22 };
-    }
-    return { x: 90, y: this.cssH - 90, outerR: this.JOYSTICK_RADIUS, knobR: this.KNOB_RADIUS };
-  }
-
-  private handleJoystickMove(touchX: number, touchY: number) {
-    const jc = this.getJoystickCenter();
-    const cx = jc.x;
-    const cy = jc.y;
-    this.joystickCenterX = cx;
-    this.joystickCenterY = cy;
-
-    const dx = touchX - cx;
-    const dy = touchY - cy;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    // Dead zone — ignore tiny movements
-    if (dist < this.DEAD_ZONE) {
-      this.joystickKnobX = cx;
-      this.joystickKnobY = cy;
-      return;
-    }
-
-    // Clamp knob to joystick radius
-    if (dist > jc.outerR) {
-      this.joystickKnobX = cx + (dx / dist) * jc.outerR;
-      this.joystickKnobY = cy + (dy / dist) * jc.outerR;
-    } else {
-      this.joystickKnobX = touchX;
-      this.joystickKnobY = touchY;
-    }
-
-    // Update angle from center
-    this.inputAngle = Math.atan2(dy, dx);
-
-    // Joystick is direction ONLY — no boost from joystick
-  }
-
-  // Draw joystick on MAIN canvas — ALWAYS visible at bottom-left
-  private drawJoystick(ctx: CanvasRenderingContext2D) {
-    const jc = this.getJoystickCenter();
-    const cx = jc.x;
-    const cy = jc.y;
-
-    // Outer ring — filled + stroked
-    ctx.beginPath();
-    ctx.arc(cx, cy, jc.outerR, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    // Inner knob — snaps back to center when not active
-    const knobX = this.joystickActive ? this.joystickKnobX : cx;
-    const knobY = this.joystickActive ? this.joystickKnobY : cy;
-
-    ctx.beginPath();
-    ctx.arc(knobX, knobY, jc.knobR, 0, Math.PI * 2);
-    ctx.fillStyle = this.joystickActive ? "rgba(255, 255, 255, 0.5)" : "rgba(255, 255, 255, 0.4)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // --- DEBUG TOGGLE ---
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "`") this.debugMode = !this.debugMode;
+    });
   }
 
   // ─── Boost Button (bottom-right, mobile) ──────────
@@ -1043,7 +926,7 @@ export class GameRenderer {
     // Energy arc around the outside
     this.drawBoostEnergyArc(ctx, x, y, radius + 5);
 
-    // Main circle — brighter default state
+    // Main circle
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     if (this.touchBoosting && canBoost) {
@@ -1167,13 +1050,20 @@ export class GameRenderer {
     if (!this.ready) {
       this.drawLoadingScreen();
     } else {
-      this.update(this.dt);
+      // Fixed-step simulation — deterministic across all FPS
+      this.simAccumulator += Math.min(this.dt, 0.1);
+      while (this.simAccumulator >= this.SIM_DT) {
+        this.update(this.SIM_DT);
+        this.simAccumulator -= this.SIM_DT;
+      }
       this.draw();
       // Draw touch controls on main canvas AFTER all game rendering (screen coords)
       if (this.isTouchDevice) {
-        this.drawJoystick(this.ctx);
+        if (this.joystick) this.joystick.draw(this.ctx, this.cssW, this.cssH);
         this.drawBoostButton(this.ctx);
       }
+      // Debug overlay
+      if (this.debugMode) this.drawDebugOverlay();
       // Send input at throttled rate from render loop
       this.sendThrottledInput();
     }
@@ -1249,6 +1139,79 @@ export class GameRenderer {
     ctx.fillText(statusText, W / 2, barY + 28);
   }
 
+  // ─── Debug Overlay ──────────────────────────────────
+
+  private drawDebugOverlay() {
+    const ctx = this.ctx;
+    const me = this.localSnakes.get(this.mySessionId);
+    if (!me || !me.alive) return;
+
+    // World-to-screen transform
+    const toSx = (wx: number) => (wx - this.camX) * this.zoom + this.cssW / 2;
+    const toSy = (wy: number) => (wy - this.camY) * this.zoom + this.cssH / 2;
+
+    const hx = toSx(me.headX);
+    const hy = toSy(me.headY);
+
+    // Input angle ray (green)
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx + Math.cos(this.inputAngle) * 80, hy + Math.sin(this.inputAngle) * 80);
+    ctx.strokeStyle = "#00ff00";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Current heading ray (yellow)
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx + Math.cos(me.angle) * 60, hy + Math.sin(me.angle) * 60);
+    ctx.strokeStyle = "#ffff00";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Server ghost position (faint red circle)
+    const sgx = toSx(me.serverHeadX);
+    const sgy = toSy(me.serverHeadY);
+    ctx.beginPath();
+    ctx.arc(sgx, sgy, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255, 50, 50, 0.6)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Collision radius circle
+    const bodyR = getBodyRadius(me.serverLength || 40) * this.zoom;
+    ctx.beginPath();
+    ctx.arc(hx, hy, bodyR, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255, 255, 0, 0.3)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Text info
+    const delta = angleDiff(this.inputAngle, me.angle);
+    const isBoosting = this.touchBoosting || this.mouseDown;
+    const speedT = isBoosting ? 480 : 240;
+    const motion: SnakeMotionState = { heading: me.angle, speed: speedT, minSpeed: 240, maxSpeed: 480 };
+    const turnRateNow = (motion.speed - motion.minSpeed) / (motion.maxSpeed - motion.minSpeed || 1);
+    const maxTurn = DEFAULT_STEERING.turnRateSlow + (DEFAULT_STEERING.turnRateFast - DEFAULT_STEERING.turnRateSlow) * turnRateNow;
+
+    ctx.font = "12px monospace";
+    ctx.fillStyle = "#00ff88";
+    ctx.textAlign = "left";
+    const drift = Math.sqrt((me.headX - me.serverHeadX) ** 2 + (me.headY - me.serverHeadY) ** 2);
+    const lines = [
+      `FPS: ${this.fps}`,
+      `delta: ${(delta * 180 / Math.PI).toFixed(1)}°`,
+      `maxTurn: ${maxTurn.toFixed(2)} rad/s`,
+      `drift: ${drift.toFixed(1)} px`,
+      `correction: ${me.correctionFrames} frames`,
+      `boost: ${isBoosting}`,
+      `speed: ${speedT} px/s`,
+    ];
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], 10, 20 + i * 16);
+    }
+  }
+
   // ─── Viewport culling helper (zoom-aware) ──────────
 
   private isInView(wx: number, wy: number, margin: number = 200): boolean {
@@ -1263,31 +1226,48 @@ export class GameRenderer {
 
     this.boostFrameCounter++;
 
+    // Update joystick smoothing (dt-based exponential filter)
+    if (this.joystick) {
+      this.joystick.update(dt);
+      const jOut = this.joystick.getOutput();
+      if (jOut.hasInput) {
+        this.inputAngle = jOut.angle;
+      }
+      this.touchBoosting = jOut.boosting;
+    }
+
     for (const [id, snake] of this.localSnakes) {
       if (!snake.alive) continue;
       const isMe = id === this.mySessionId;
 
-      // Cap dt to prevent lag spike teleporting
-      const safeDt = Math.min(dt, 0.05);
-
       if (isMe) {
-        // ═══ STEERING: Slither.io-style clamped turn rate ═══
-        let delta = this.inputAngle - snake.angle;
-        while (delta > Math.PI) delta -= Math.PI * 2;
-        while (delta < -Math.PI) delta += Math.PI * 2;
-
-        // Turn rate: slower when boosting (wider arcs), faster at normal speed
+        // ═══ LOCAL PLAYER — predictive steering ═══
         const isBoosting = this.touchBoosting || this.mouseDown;
-        const maxTurnRate = isBoosting ? 2.5 : 4.5; // radians per second
-        const maxStep = maxTurnRate * safeDt;
-        snake.angle += Math.max(-maxStep, Math.min(maxStep, delta));
+        const speedPxPerSec = isBoosting ? 480 : 240; // 8*30=240, 16*30=480
 
-        // ═══ MOVEMENT: constant speed, time-based ═══
-        const speed = isBoosting ? 480 : 240; // must match server: speed * tickRate
-        snake.headX += Math.cos(snake.angle) * speed * safeDt;
-        snake.headY += Math.sin(snake.angle) * speed * safeDt;
+        // Build motion state for steering module
+        const motion: SnakeMotionState = {
+          heading: snake.angle,
+          speed: speedPxPerSec,
+          minSpeed: 240,
+          maxSpeed: 480,
+        };
 
-        // ═══ SERVER CORRECTION: only when onChange fires ═══
+        // Desktop: target is screen center + mouse offset (angle from center)
+        // Mobile: target is head + direction from joystick angle
+        // Both produce a world-space target point for the steering function
+        const targetDist = 200; // virtual target distance for angle-only input
+        const targetX = snake.headX + Math.cos(this.inputAngle) * targetDist;
+        const targetY = snake.headY + Math.sin(this.inputAngle) * targetDist;
+
+        updateHeadingFromTarget(motion, snake.headX, snake.headY, targetX, targetY, dt, DEFAULT_STEERING);
+        snake.angle = motion.heading;
+
+        // Move forward at matched server speed
+        snake.headX += Math.cos(snake.angle) * speedPxPerSec * dt;
+        snake.headY += Math.sin(snake.angle) * speedPxPerSec * dt;
+
+        // Server correction: spread over 5 frames, only set by onChange
         if (snake.correctionFrames > 0) {
           const frac = 1 / snake.correctionFrames;
           snake.headX += snake.correctionX * frac;
@@ -1297,7 +1277,7 @@ export class GameRenderer {
           snake.correctionFrames--;
         }
 
-        // ═══ BOOST: sound and particles ═══
+        // Boost sound and particles
         if (isBoosting && !this.wasBoosting) this.audio.startBoost();
         if (!isBoosting && this.wasBoosting) this.audio.stopBoost();
         this.wasBoosting = isBoosting;
@@ -1306,17 +1286,15 @@ export class GameRenderer {
         }
 
       } else {
-        // ═══ OTHER SNAKES: turn-rate steering toward server angle ═══
-        let delta = snake.serverAngle - snake.angle;
-        while (delta > Math.PI) delta -= Math.PI * 2;
-        while (delta < -Math.PI) delta += Math.PI * 2;
-        const maxStep = 4.5 * safeDt;
-        snake.angle += Math.max(-maxStep, Math.min(maxStep, delta));
+        // ═══ OTHER SNAKES — turn-rate steering toward server angle ═══
+        const delta = angleDiff(snake.serverAngle, snake.angle);
+        const maxStep = DEFAULT_STEERING.turnRateSlow * dt;
+        snake.angle += clamp(delta, -maxStep, maxStep);
 
         // Move forward at server speed (converted to px/sec)
-        const speed = (snake.serverSpeed || 8) * 30; // server units/tick * 30 ticks/sec
-        snake.headX += Math.cos(snake.angle) * speed * safeDt;
-        snake.headY += Math.sin(snake.angle) * speed * safeDt;
+        const speed = (snake.serverSpeed || 8) * 30;
+        snake.headX += Math.cos(snake.angle) * speed * dt;
+        snake.headY += Math.sin(snake.angle) * speed * dt;
 
         // Server correction
         if (snake.correctionFrames > 0) {
@@ -1342,23 +1320,12 @@ export class GameRenderer {
         snake.correctionFrames = 0;
       }
 
-      // ═══ CHAIN CONSTRAINT ═══
+      // ═══ CHAIN CONSTRAINT (shared utility) ═══
       if (snake.segments.length > 0) {
         snake.segments[0].x = snake.headX;
         snake.segments[0].y = snake.headY;
       }
-      for (let i = 1; i < snake.segments.length; i++) {
-        const prev = snake.segments[i - 1];
-        const curr = snake.segments[i];
-        const cdx = curr.x - prev.x;
-        const cdy = curr.y - prev.y;
-        const dist = Math.sqrt(cdx * cdx + cdy * cdy);
-        if (dist > 4) {
-          const a = Math.atan2(cdy, cdx);
-          curr.x = prev.x + Math.cos(a) * 4;
-          curr.y = prev.y + Math.sin(a) * 4;
-        }
-      }
+      chainConstrain(snake.segments, 4);
 
       // LENGTH
       const targetLen = snake.serverLength || 40;
