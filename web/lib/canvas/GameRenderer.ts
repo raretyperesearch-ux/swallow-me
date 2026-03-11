@@ -20,6 +20,7 @@ interface LocalSnake {
   isBot: boolean;
   kills: number;
   valueUsdc: number;
+  _currentSpeed?: number;
 }
 
 // Unified pooled particle — pre-allocated, never created/destroyed in hot path
@@ -1276,9 +1277,11 @@ export class GameRenderer {
         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
         snake.angle += angleDiff * turnLerp;
 
-        // Move head locally at predicted speed (dt-based)
-        const speed = snake.boosting ? 16.0 : 8.0;
-        const moveDist = speed * dt * 60; // normalize to 60fps baseline
+        // Smooth speed transition instead of instant switch
+        const targetSpeed = snake.boosting ? 16.0 : 8.0;
+        if (!snake._currentSpeed) snake._currentSpeed = 8.0;
+        snake._currentSpeed += (targetSpeed - snake._currentSpeed) * 0.2;
+        const moveDist = snake._currentSpeed * dt * 60; // normalize to 60fps baseline
         snake.headX += Math.cos(snake.angle) * moveDist;
         snake.headY += Math.sin(snake.angle) * moveDist;
 
@@ -1328,8 +1331,7 @@ export class GameRenderer {
         snake.segments[0].y = snake.headY;
       }
 
-      const snakeBodyRadius = 6 + Math.pow(Math.max(1, snake.serverLength - 20), 0.35) * 3;
-      const spacing = Math.max(3, snakeBodyRadius * 0.6);
+      const SEGMENT_SPACING = 4; // must match server GAME_CONFIG.SEGMENT_SPACING
       for (let i = 1; i < snake.segments.length; i++) {
         const prev = snake.segments[i - 1];
         const curr = snake.segments[i];
@@ -1337,10 +1339,10 @@ export class GameRenderer {
         const dy = curr.y - prev.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        if (dist > spacing) {
+        if (dist > SEGMENT_SPACING) {
           const angle = Math.atan2(dy, dx);
-          curr.x = prev.x + Math.cos(angle) * spacing;
-          curr.y = prev.y + Math.sin(angle) * spacing;
+          curr.x = prev.x + Math.cos(angle) * SEGMENT_SPACING;
+          curr.y = prev.y + Math.sin(angle) * SEGMENT_SPACING;
         }
       }
 
@@ -1440,8 +1442,8 @@ export class GameRenderer {
       this.room.send("viewport", {
         x: this.camX,
         y: this.camY,
-        w: this.cssW / this.zoom,
-        h: this.cssH / this.zoom,
+        w: (this.cssW / this.zoom) * 1.5,
+        h: (this.cssH / this.zoom) * 1.5,
       });
     }
   }
