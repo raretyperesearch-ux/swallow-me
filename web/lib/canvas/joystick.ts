@@ -55,6 +55,9 @@ export class Joystick {
   private releaseTime = 0;
   private releaseAngle = 0;
 
+  // First-frame snap detection
+  private wasActive = false;
+
   // Last touch position for noise filter
   private lastTouchX = 0;
   private lastTouchY = 0;
@@ -140,6 +143,7 @@ export class Joystick {
       if (tid === this.touchId) {
         this.active = false;
         this.activated = false;
+        this.wasActive = false;
         this.touchId = null;
         this.releaseTime = Date.now();
         this.releaseAngle = this.rawAngle;
@@ -158,6 +162,7 @@ export class Joystick {
   onTouchCancel(cssW: number, cssH: number): void {
     this.active = false;
     this.activated = false;
+    this.wasActive = false;
     this.touchId = null;
     const jc = this.getCenter(cssW, cssH);
     this.knobX = jc.x;
@@ -211,9 +216,14 @@ export class Joystick {
 
   update(dt: number): void {
     if (this.active && this.hasInput) {
-      // Smooth INTENSITY only (not angle — angle is raw)
-      const a = 1 - Math.exp(-this.cfg.smoothK * dt);
-      this.smoothMagnitude += (this.rawMagnitude - this.smoothMagnitude) * a;
+      if (!this.wasActive && this.rawMagnitude > 0) {
+        // First active frame: snap to current input to remove startup lag
+        this.smoothMagnitude = this.rawMagnitude;
+      } else {
+        // Smooth INTENSITY only (not angle — angle is raw)
+        const a = 1 - Math.exp(-this.cfg.smoothK * dt);
+        this.smoothMagnitude += (this.rawMagnitude - this.smoothMagnitude) * a;
+      }
     } else {
       // Decay magnitude toward zero on release
       const elapsed = Date.now() - this.releaseTime;
@@ -221,6 +231,7 @@ export class Joystick {
       this.smoothMagnitude *= (1 - decayT);
       if (this.smoothMagnitude < 0.01) this.smoothMagnitude = 0;
     }
+    this.wasActive = this.active && this.hasInput;
   }
 
   getOutput(): JoystickOutput {
