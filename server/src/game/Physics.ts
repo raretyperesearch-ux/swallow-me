@@ -28,8 +28,8 @@ function getBodyRadius(segmentCount: number): number {
   return 6 + Math.pow(Math.max(1, segmentCount - 20), 0.35) * 3;
 }
 
-// Collision epsilon: forgiveness margin (px) to suppress phantom/ghost kills
-const COLLISION_EPSILON = 4;
+// Collision epsilon: forgiveness margin (px) — tightened to reduce pass-throughs
+const COLLISION_EPSILON = 3;
 
 // 2-tick collision persistence: carry counts between ticks
 let pendingCollisionCounts = new Map<string, number>();
@@ -137,23 +137,45 @@ export function checkSnakeCollisions(
         );
 
         if (dSq < killDistSq) {
+          const actualDist = Math.sqrt(dSq);
+          const penetration = killDist - actualDist;
           const key = `${id}:${otherId}:${i}`;
-          const prev = pendingCollisionCounts.get(key) ?? 0;
-          const count = prev + 1;
-          nextCounts.set(key, count);
 
-          if (count >= 2 && !alreadyDead.has(id)) {
-            const dist = Math.sqrt(dSq);
-            console.log(`[KILL] victim=${snake.name}(${id}) killer=${other.name}(${otherId}) seg=${i} dist=${dist.toFixed(1)} killDist=${killDist.toFixed(1)} ticks=${count}`);
-            kills.push({
-              killer: otherId,
-              victim: id,
-              victimValue: snake.valueUsdc,
-              victimName: snake.name,
-              killerName: other.name,
-              timestamp: now,
-            });
-            alreadyDead.add(id);
+          // Deep overlap threshold: mixed abs/relative for all snake sizes
+          const deepThreshold = Math.max(2.0, killDist * 0.35);
+
+          if (penetration >= deepThreshold) {
+            // DEEP HIT: instant kill (prevents high-speed pass-through)
+            if (!alreadyDead.has(id)) {
+              console.log(`[KILL:deep_instant] victim=${snake.name}(${id}) killer=${other.name}(${otherId}) seg=${i} dist=${actualDist.toFixed(1)} killDist=${killDist.toFixed(1)} pen=${penetration.toFixed(1)}`);
+              kills.push({
+                killer: otherId,
+                victim: id,
+                victimValue: snake.valueUsdc,
+                victimName: snake.name,
+                killerName: other.name,
+                timestamp: now,
+              });
+              alreadyDead.add(id);
+            }
+          } else {
+            // SHALLOW EDGE TOUCH: require 2-tick persistence (anti-ghost-kill)
+            const prev = pendingCollisionCounts.get(key) ?? 0;
+            const count = prev + 1;
+            nextCounts.set(key, count);
+
+            if (count >= 2 && !alreadyDead.has(id)) {
+              console.log(`[KILL:shallow_persist] victim=${snake.name}(${id}) killer=${other.name}(${otherId}) seg=${i} dist=${actualDist.toFixed(1)} killDist=${killDist.toFixed(1)} pen=${penetration.toFixed(1)} ticks=${count}`);
+              kills.push({
+                killer: otherId,
+                victim: id,
+                victimValue: snake.valueUsdc,
+                victimName: snake.name,
+                killerName: other.name,
+                timestamp: now,
+              });
+              alreadyDead.add(id);
+            }
           }
           break;
         }
