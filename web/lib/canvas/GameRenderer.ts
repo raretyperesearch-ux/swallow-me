@@ -1664,22 +1664,24 @@ export class GameRenderer {
     const colEnd = Math.ceil(worldRight / w) + 1;
 
     ctx.save();
-    ctx.globalAlpha = 0.045;
+    ctx.globalAlpha = 0.035;
 
     for (let row = rowStart; row <= rowEnd; row++) {
       for (let col = colStart; col <= colEnd; col++) {
-        // deterministic ~1/10 fill rate (no per-frame randomness/flicker)
-        const hash = ((row * 7919 + col * 104729) & 0x7fffffff) % 10;
+        // deterministic ~1/25 fill rate (no per-frame randomness/flicker)
+        const hash = ((row * 7919 + col * 104729) & 0x7fffffff) % 25;
         if (hash !== 0) continue;
 
-        const cx = col * w + (row % 2 === 0 ? 0 : w * 0.5);
-        const cy = row * vStep;
+        // Match initHexPattern tile offsets exactly:
+        // even rows center at x = col*w + w*0.5; odd rows at x = col*w + w*1.0
+        const cx = col * w + (row & 1 ? w * 0.5 : 0) + w * 0.5;
+        const cy = row * vStep + r;
 
         const sx = (cx - camX) * zoom + W * 0.5;
         const sy = (cy - camY) * zoom + H * 0.5;
         if (sx < -r * zoom || sy < -r * zoom || sx > W + r * zoom || sy > H + r * zoom) continue;
 
-        const logoW = (w * 0.65) * zoom;
+        const logoW = (w * 0.9) * zoom;
         const logoH = logoW * 0.5; // 200x100 source aspect
 
         ctx.drawImage(this.bgLogoCanvas, sx - logoW * 0.5, sy - logoH * 0.5, logoW, logoH);
