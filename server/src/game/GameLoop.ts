@@ -74,6 +74,14 @@ export function runGameTick(
     }
   }
 
+  // Tick-level kill summary for QA/debugging
+  if (allKills.length > 0) {
+    console.log(
+      `[TICK] ${allKills.length} kills this tick: ` +
+        allKills.map(k => `${k.killerName}→${k.victimName}`).join(', '),
+    );
+  }
+
   // 4. Process kills
   for (const kill of allKills) {
     const victim = snakes.get(kill.victim);

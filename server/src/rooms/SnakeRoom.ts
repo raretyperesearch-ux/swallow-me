@@ -1,7 +1,7 @@
 import { Room, Client } from "colyseus";
 import { SnakeRoomState, SnakeEntity, FoodOrb, KillFeedEntry } from "./SnakeState";
 import { ServerSnake, createSnake } from "../game/Snake";
-import { ServerFood, spawnRandomFood } from "../game/Food";
+import { ServerFood, spawnRandomFood, spawnDeathFood } from "../game/Food";
 import { runGameTick } from "../game/GameLoop";
 import { KillEvent } from "../game/Physics";
 import { findSafeSpawn } from "../game/Arena";
@@ -212,7 +212,9 @@ export class SnakeRoom extends Room<SnakeRoomState> {
 
   private handleKill(event: KillEvent) {
     const victim = this.serverSnakes.get(event.victim);
-    if (!victim) return;
+    if (!victim || !victim.alive) return;
+
+    victim.alive = false; // mark first to make handler idempotent
 
     const tierConfig = TIER_CONFIG[this.tier];
     const rakeAmount = Math.floor(event.victimValue * tierConfig.rakeBps / 10000);
@@ -313,16 +315,14 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         if (snake.isBot && snake.alive && Math.random() < 0.3) {
           snake.alive = false;
           this.serverSnakes.delete(id);
-          if (this.state.snakes.has(id)) {
-            this.state.snakes.delete(id);
-          }
           removeBotState(id);
+          // syncSnakesToState handles state.snakes cleanup next cycle
           break;
         }
       }
     }
 
-    // Randomly kill bots occasionally
+    // Randomly despawn bots occasionally (direct cleanup, no kill event path)
     if (aliveBotsCount > 2 && Math.random() < 0.15) {
       const bots = Array.from(this.serverSnakes.entries()).filter(
         ([, s]) => s.isBot && s.alive
@@ -330,18 +330,16 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       if (bots.length > 0) {
         const [botId, bot] = bots[Math.floor(Math.random() * bots.length)];
         bot.alive = false;
-        // handleKill already removes from state.snakes, so don't delete here
-        this.handleKill({
-          killer: null,
-          victim: botId,
-          victimValue: bot.valueUsdc,
-          victimName: bot.name,
-          killerName: "timeout",
-          timestamp: Date.now(),
-        });
-        // Clean up server state and bot AI after handleKill
+
+        const deathFoods = spawnDeathFood(bot.segments, GAME_CONFIG.DEATH_FOOD_COUNT);
+        for (const f of deathFoods) {
+          this.serverFoods.set(f.id, f);
+          this.addFoodToState(f);
+        }
+
         this.serverSnakes.delete(botId);
         removeBotState(botId);
+        // syncSnakesToState handles state.snakes cleanup next cycle
       }
     }
   }
