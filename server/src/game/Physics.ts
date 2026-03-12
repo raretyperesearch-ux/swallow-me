@@ -28,8 +28,11 @@ function getBodyRadius(segmentCount: number): number {
   return 6 + Math.pow(Math.max(1, segmentCount - 20), 0.35) * 3;
 }
 
-// Collision epsilon: small forgiveness margin to suppress phantom kills from float noise
-const COLLISION_EPSILON = 2.0;
+// Collision epsilon: forgiveness margin (px) to suppress phantom/ghost kills
+const COLLISION_EPSILON = 4;
+
+// 2-tick collision persistence: carry counts between ticks
+let pendingCollisionCounts = new Map<string, number>();
 
 // Spawn grace period: ignore collisions for this long after spawning
 const SPAWN_GRACE_MS = 2000;
@@ -103,10 +106,12 @@ export function checkSnakeCollisions(
 ): KillEvent[] {
   const kills: KillEvent[] = [];
   const alreadyDead = new Set<string>();
+  const nextCounts = new Map<string, number>();
 
   const now = Date.now();
 
   // HEAD vs BODY: swept capsule check (prevHead→head vs body segments)
+  // Requires 2 consecutive ticks of overlap before confirming kill
   for (const [id, snake] of snakes) {
     if (!snake.alive || alreadyDead.has(id)) continue;
     // Spawn grace: newly spawned snakes can't be killed
@@ -118,7 +123,7 @@ export function checkSnakeCollisions(
       if (otherId === id || !other.alive || alreadyDead.has(otherId)) continue;
 
       const otherBodyRadius = getBodyRadius(other.segments.length);
-      // Epsilon forgiveness: subtract small margin to prevent phantom kills
+      // Epsilon forgiveness: subtract margin to prevent phantom kills
       const killDist = headRadius + otherBodyRadius - COLLISION_EPSILON;
       const killDistSq = killDist * killDist;
 
@@ -132,15 +137,24 @@ export function checkSnakeCollisions(
         );
 
         if (dSq < killDistSq) {
-          kills.push({
-            killer: otherId,
-            victim: id,
-            victimValue: snake.valueUsdc,
-            victimName: snake.name,
-            killerName: other.name,
-            timestamp: now,
-          });
-          alreadyDead.add(id);
+          const key = `${id}:${otherId}:${i}`;
+          const prev = pendingCollisionCounts.get(key) ?? 0;
+          const count = prev + 1;
+          nextCounts.set(key, count);
+
+          if (count >= 2 && !alreadyDead.has(id)) {
+            const dist = Math.sqrt(dSq);
+            console.log(`[KILL] victim=${snake.name}(${id}) killer=${other.name}(${otherId}) seg=${i} dist=${dist.toFixed(1)} killDist=${killDist.toFixed(1)} ticks=${count}`);
+            kills.push({
+              killer: otherId,
+              victim: id,
+              victimValue: snake.valueUsdc,
+              victimName: snake.name,
+              killerName: other.name,
+              timestamp: now,
+            });
+            alreadyDead.add(id);
+          }
           break;
         }
       }
@@ -149,6 +163,7 @@ export function checkSnakeCollisions(
   }
 
   // Head-to-head: bigger snake wins, same size = both die
+  // Head-to-head is instant (no 2-tick requirement — it's obvious/mutual)
   const heads = Array.from(snakes.entries()).filter(
     ([id, s]) => s.alive && !alreadyDead.has(id) && now - s.spawnTime >= SPAWN_GRACE_MS
   );
@@ -176,6 +191,9 @@ export function checkSnakeCollisions(
       }
     }
   }
+
+  // Carry persistence state to next tick
+  pendingCollisionCounts = nextCounts;
 
   return kills;
 }

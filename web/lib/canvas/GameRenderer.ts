@@ -1318,7 +1318,11 @@ export class GameRenderer {
         snake.headX += Math.cos(snake.angle) * otherSpeed * dt;
         snake.headY += Math.sin(snake.angle) * otherSpeed * dt;
 
-        // Server correction
+        // Tight lerp toward server position to reduce visual/server mismatch
+        snake.headX += (snake.serverHeadX - snake.headX) * 0.5;
+        snake.headY += (snake.serverHeadY - snake.headY) * 0.5;
+
+        // Server correction (residual from onChange spread)
         if (snake.correctionFrames > 0) {
           const frac = 1 / snake.correctionFrames;
           snake.headX += snake.correctionX * frac;
