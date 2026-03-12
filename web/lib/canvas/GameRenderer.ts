@@ -302,11 +302,6 @@ export class GameRenderer {
   private hexPatternCanvas: HTMLCanvasElement | null = null;
   private bgBaseColor = '#1a1a2e';
   private bgLogoCanvas: HTMLCanvasElement | null = null;
-  private bgLogoPositions: Array<[number, number]> = [
-    [-3200, -2800], [2400, -3500], [-1000, 1200],
-    [3800, 800], [-2600, 3100], [1500, -1000],
-    [400, 3800], [-3800, -500], [2800, 2600],
-  ];
 
   // Assets
   private bgImage: HTMLImageElement | null = null;
@@ -1498,7 +1493,7 @@ export class GameRenderer {
 
     // Hex background (fills base color + pattern, no clearRect needed)
     this.drawHexBackground(ctx, this.camX, this.camY, this.zoom, W, H);
-    this.drawBgLogos(ctx, this.camX, this.camY, this.zoom, W, H);
+    this.drawHexLogos(ctx, this.camX, this.camY, this.zoom, W, H);
 
     this.drawBoundary(ctx, W, H);
     this.drawFood(ctx, W, H);
@@ -1643,7 +1638,7 @@ export class GameRenderer {
     ctx.restore();
   }
 
-  private drawBgLogos(
+  private drawHexLogos(
     ctx: CanvasRenderingContext2D,
     camX: number,
     camY: number,
@@ -1653,18 +1648,42 @@ export class GameRenderer {
   ): void {
     if (!this.bgLogoCanvas) return;
 
+    const r = 40; // must match initHexPattern()
+    const w = Math.sqrt(3) * r;
+    const vStep = 1.5 * r;
+
+    const margin = r * 2;
+    const worldLeft = camX - W / zoom / 2 - margin;
+    const worldRight = camX + W / zoom / 2 + margin;
+    const worldTop = camY - H / zoom / 2 - margin;
+    const worldBottom = camY + H / zoom / 2 + margin;
+
+    const rowStart = Math.floor(worldTop / vStep) - 1;
+    const rowEnd = Math.ceil(worldBottom / vStep) + 1;
+    const colStart = Math.floor(worldLeft / w) - 1;
+    const colEnd = Math.ceil(worldRight / w) + 1;
+
     ctx.save();
-    ctx.globalAlpha = 0.04;
+    ctx.globalAlpha = 0.045;
 
-    const s = Math.max(0.65, Math.min(1.25, zoom));
-    const logoW = 200 * s;
-    const logoH = 100 * s;
+    for (let row = rowStart; row <= rowEnd; row++) {
+      for (let col = colStart; col <= colEnd; col++) {
+        // deterministic ~1/10 fill rate (no per-frame randomness/flicker)
+        const hash = ((row * 7919 + col * 104729) & 0x7fffffff) % 10;
+        if (hash !== 0) continue;
 
-    for (const [wx, wy] of this.bgLogoPositions) {
-      const sx = (wx - camX) * zoom + W * 0.5;
-      const sy = (wy - camY) * zoom + H * 0.5;
-      if (sx < -logoW || sy < -logoH || sx > W + logoW || sy > H + logoH) continue;
-      ctx.drawImage(this.bgLogoCanvas, sx - logoW * 0.5, sy - logoH * 0.5, logoW, logoH);
+        const cx = col * w + (row % 2 === 0 ? 0 : w * 0.5);
+        const cy = row * vStep;
+
+        const sx = (cx - camX) * zoom + W * 0.5;
+        const sy = (cy - camY) * zoom + H * 0.5;
+        if (sx < -r * zoom || sy < -r * zoom || sx > W + r * zoom || sy > H + r * zoom) continue;
+
+        const logoW = (w * 0.65) * zoom;
+        const logoH = logoW * 0.5; // 200x100 source aspect
+
+        ctx.drawImage(this.bgLogoCanvas, sx - logoW * 0.5, sy - logoH * 0.5, logoW, logoH);
+      }
     }
 
     ctx.restore();
