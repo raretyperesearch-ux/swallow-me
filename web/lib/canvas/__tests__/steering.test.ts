@@ -70,14 +70,14 @@ describe("angleDiff", () => {
 describe("updateHeadingFromTarget", () => {
   const cfg: SteeringConfig = {
     dtCap: 0.05,
-    deadZonePx: 14,
+    deadZonePx: 6,
     turnRateSlow: 5.8,
     turnRateFast: 3.2,
   };
 
   it("does not turn inside dead zone", () => {
     const s: SnakeMotionState = { heading: 0, speed: 240, minSpeed: 240, maxSpeed: 480 };
-    updateHeadingFromTarget(s, 100, 100, 107, 107, 1 / 60, cfg); // ~10px away
+    updateHeadingFromTarget(s, 100, 100, 103, 103, 1 / 60, cfg); // ~4.2px away
     expect(s.heading).toBe(0);
   });
 

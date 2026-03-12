@@ -30,14 +30,14 @@ export interface SnakeMotionState {
 
 export interface SteeringConfig {
   dtCap: number;        // 0.05
-  deadZonePx: number;   // 14
+  deadZonePx: number;   // 6
   turnRateSlow: number; // 5.8 rad/s
   turnRateFast: number; // 3.2 rad/s
 }
 
 export const DEFAULT_STEERING: SteeringConfig = {
   dtCap: 0.05,
-  deadZonePx: 14,
+  deadZonePx: 6,
   turnRateSlow: 5.8,
   turnRateFast: 3.2,
 };
