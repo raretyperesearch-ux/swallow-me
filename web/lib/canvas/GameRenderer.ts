@@ -1598,7 +1598,9 @@ export class GameRenderer {
     const g = c.getContext('2d')!;
 
     g.clearRect(0, 0, c.width, c.height);
-    g.font = '700 48px Inter, Arial, sans-serif';
+    g.shadowColor = 'rgba(0, 230, 118, 0.3)';
+    g.shadowBlur = 6;
+    g.font = '800 48px Inter, Arial, sans-serif';
     g.textAlign = 'center';
     g.textBaseline = 'top';
     g.fillStyle = '#ffffff';
@@ -1664,7 +1666,7 @@ export class GameRenderer {
     const colEnd = Math.ceil(worldRight / w) + 1;
 
     ctx.save();
-    ctx.globalAlpha = 0.035;
+    ctx.globalAlpha = 0.12;
 
     for (let row = rowStart; row <= rowEnd; row++) {
       for (let col = colStart; col <= colEnd; col++) {
