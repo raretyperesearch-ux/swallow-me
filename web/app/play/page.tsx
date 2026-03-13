@@ -676,7 +676,7 @@ export default function PlayPage() {
 
         {/* Discord CTA */}
         <a
-          href="https://discord.gg/TRJdye4M"
+          href="https://discord.gg/RXmKtyQhRz"
           target="_blank"
           rel="noopener noreferrer"
           style={{
