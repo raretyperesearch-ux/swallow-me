@@ -250,6 +250,21 @@ export default function PlayPage() {
         "confirmed"
       );
 
+      // Check SOL balance for gas fees
+      try {
+        const solBalance = await connection.getBalance(playerPubkey);
+        const solAmount = solBalance / 1_000_000_000;
+        console.log('[JOIN] SOL balance:', solAmount);
+
+        if (solAmount < 0.005) {
+          showToast('You need SOL for transaction fees. Send at least 0.01 SOL to your wallet.', 'error');
+          setConnecting(false);
+          return;
+        }
+      } catch (e) {
+        console.error('[JOIN] SOL balance check failed:', e);
+      }
+
       const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
       const TREASURY = new PublicKey("53Qy2ygocLjKWbtjgaepzHfZnf9oiZENJPWMnNUkSz8L");
 
@@ -964,9 +979,9 @@ export default function PlayPage() {
               <div style={{ fontSize: 16, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
                 Add Funds
               </div>
-              <div style={{ fontSize: 12, color: "#666", marginBottom: 16, lineHeight: 1.5 }}>
-                Send <span style={{ color: "#00E676", fontWeight: 700 }}>USDC</span> on
-                <span style={{ color: "#BB86FC", fontWeight: 700 }}> Solana</span> to this address:
+              <div style={{ fontSize: 12, color: "#666", lineHeight: 1.6, marginBottom: 16 }}>
+                Send <span style={{ color: "#00E676", fontWeight: 700 }}>USDC</span> and a small amount of
+                <span style={{ color: "#BB86FC", fontWeight: 700 }}> SOL</span> (for fees) on Solana to this address:
               </div>
               <div style={{
                 background: "#0c0610",
@@ -981,6 +996,10 @@ export default function PlayPage() {
                 lineHeight: 1.6,
               }}>
                 {walletAddress}
+              </div>
+              <div style={{ fontSize: 10, color: '#555', marginTop: -4, marginBottom: 12, lineHeight: 1.5 }}>
+                You need both USDC (to play) and SOL (for transaction fees).<br/>
+                Minimum: $1.00 USDC + 0.01 SOL (~$1.50 total)
               </div>
               <button
                 onClick={() => {
@@ -1055,8 +1074,8 @@ export default function PlayPage() {
                 Add Funds to Play
               </div>
               <div style={{ fontSize: 13, color: "#888", lineHeight: 1.6, marginBottom: 20 }}>
-                You need at least <span style={{ color: "#00E676", fontWeight: 700 }}>$1.00 USDC</span> on
-                <span style={{ color: "#BB86FC", fontWeight: 700 }}> Solana</span> to enter the game.
+                You need at least <span style={{ color: "#00E676", fontWeight: 700 }}>$1.00 USDC</span> and a small amount of
+                <span style={{ color: "#BB86FC", fontWeight: 700 }}> SOL</span> (for fees) on Solana to enter the game.
               </div>
 
               {authenticated && walletAddress && (

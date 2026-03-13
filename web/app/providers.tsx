@@ -21,8 +21,8 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           solana: {
             createOnLogin: 'all-users',
           },
-          ...({ waitForTransactionConfirmation: false } as any),
-        },
+          waitForTransactionConfirmation: false,
+        } as any,
         solanaClusters: [
           {
             name: 'mainnet-beta',

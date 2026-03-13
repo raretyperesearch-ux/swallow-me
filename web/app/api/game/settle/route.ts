@@ -237,23 +237,22 @@ export async function POST(req: NextRequest) {
 
     // 8b. Record referral earning from the 10% rake
     if (outcome === 'cashout' && safeCashout > 0) {
-      const rawValue = Math.floor(safeCashout / 0.9);
-      const rake = rawValue - safeCashout;
-      const rakeDollars = rake / 1_000_000;
+      try {
+        // Calculate the rake: cashout is 90% of raw value, so rake = cashout / 9
+        const rakeDollars = (safeCashout / 9) / 1_000_000;
 
-      if (rakeDollars > 0) {
-        try {
+        if (rakeDollars > 0.001) {
           await supabase.rpc('record_referral_earning', {
             p_player_id: player.id,
-            p_fee_amount: rakeDollars,
-            p_buy_in_amount: 1.00,
             p_round_id: sessionId,
+            p_buy_in_amount: 1.00,
+            p_fee_amount: rakeDollars,
           });
-          console.log('[SETTLE] Referral earning recorded:', rakeDollars, 'for player:', player.id);
-        } catch (refErr) {
-          console.error('[SETTLE] Failed to record referral earning:', refErr);
-          // Don't fail the cashout over referral tracking
+          console.log('[SETTLE] Referral earning recorded: ' + rakeDollars.toFixed(4) + ' for player:', player.id);
         }
+      } catch (refErr) {
+        // Don't fail the cashout over referral tracking
+        console.error('[SETTLE] Referral earning failed (non-fatal):', refErr);
       }
     }
 
