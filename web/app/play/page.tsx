@@ -42,6 +42,7 @@ export default function PlayPage() {
   const [cashOutAddress, setCashOutAddress] = useState('');
   const [cashOutAmount, setCashOutAmount] = useState('');
   const [cashingOut, setCashingOut] = useState(false);
+  const [showBrowserWarning, setShowBrowserWarning] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "error" | "info" | "success" } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initRetryRef = useRef(0);
@@ -51,6 +52,14 @@ export default function PlayPage() {
     setToast({ message, type });
     toastTimerRef.current = setTimeout(() => setToast(null), 3500);
   };
+
+  // Detect in-app browsers (TikTok, Instagram, etc.)
+  useEffect(() => {
+    const ua = navigator.userAgent || '';
+    if (/FBAN|FBAV|Instagram|Telegram|TelegramBot|Twitter|Line|KAKAOTALK|Snapchat|Musical_ly|BytedanceWebview|ByteLocale|TikTok/i.test(ua)) {
+      setShowBrowserWarning(true);
+    }
+  }, []);
 
   // Post-login: register/find player + load data (waits for walletAddress from creation effect)
   useEffect(() => {
@@ -660,6 +669,63 @@ export default function PlayPage() {
 
     return (
       <div style={{ minHeight: "100vh", background: "#0c0610", color: "#fff", overflowY: "auto", overflowX: "hidden", position: "fixed", inset: 0 }}>
+        {/* In-app browser warning */}
+        {showBrowserWarning && (
+          <div style={{
+            background: 'linear-gradient(90deg, #FF8F00, #FF6F00)',
+            padding: '12px 16px',
+            textAlign: 'center' as const,
+            fontSize: 13,
+            fontWeight: 700,
+            color: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            flexWrap: 'wrap' as const,
+            position: 'relative' as const,
+            zIndex: 100,
+          }}>
+            <span>Payments may not work in this browser. Open in Safari or Chrome for the best experience.</span>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(window.location.href).then(() => {
+                  showToast('Link copied! Paste it in Safari or Chrome.', 'success');
+                }).catch(() => {
+                  showToast('Open this URL in Safari: ' + window.location.href, 'info');
+                });
+              }}
+              style={{
+                background: '#fff',
+                color: '#FF6F00',
+                border: 'none',
+                borderRadius: 8,
+                padding: '6px 16px',
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap' as const,
+              }}
+            >
+              Copy Link
+            </button>
+            <button
+              onClick={() => setShowBrowserWarning(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'rgba(255,255,255,0.6)',
+                fontSize: 18,
+                cursor: 'pointer',
+                padding: '0 4px',
+                lineHeight: 1,
+              }}
+            >
+              &times;
+            </button>
+          </div>
+        )}
+
         {/* Toast notification */}
         {toast && (
           <div
