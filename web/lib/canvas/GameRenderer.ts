@@ -665,6 +665,7 @@ export class GameRenderer {
     });
 
     this.room.onMessage("death", (data: any) => {
+      console.log('[DEATH] GameRenderer received server death message:', data);
       this.audio.playDeath();
       // Spawn full-body explosion along all segments
       const me = this.localSnakes.get(this.mySessionId);
@@ -1419,6 +1420,7 @@ export class GameRenderer {
       this.deathAnimTimer -= dt;
       if (this.deathAnimTimer <= 0) {
         this.deathAnimating = false;
+        console.log('[DEATH] GameRenderer animation complete, calling onDeath callback');
         this.onDeath?.(this.deathAnimData);
         this.deathAnimData = null;
       }

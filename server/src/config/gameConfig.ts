@@ -30,13 +30,13 @@ export const GAME_CONFIG = {
   // Food
   INITIAL_FOOD_COUNT: 800, // Food orbs at game start
   MAX_FOOD: 1500, // Cap on total food
-  FOOD_VALUE: 0.25, // Length gained per food eaten
-  DEATH_FOOD_COUNT: 15, // Food orbs dropped on death
+  FOOD_VALUE: 0.75, // Length gained per food eaten
+  DEATH_FOOD_COUNT: 20, // Food orbs dropped on death
   FOOD_SPAWN_RATE: 4, // New food per tick when below minimum
 
   // Lobby
   MIN_PLAYERS_TO_START: 3, // Real + bots needed
-  BOT_FILL_TARGET: 8, // Fill lobby to this many total with bots
+  BOT_FILL_TARGET: 8,
   MAX_PLAYERS: {
     1: 100, // $1 tier
     5: 50, // $5 tier

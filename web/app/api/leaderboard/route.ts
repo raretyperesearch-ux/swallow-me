@@ -1,0 +1,39 @@
+import { createClient } from '@supabase/supabase-js';
+import { NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
+
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
+
+export async function GET() {
+  try {
+    const supabase = getSupabase();
+    const { data: leaderboard } = await supabase
+      .from('bm_players')
+      .select('username, sm_total_earned, sm_total_kills, sm_total_games')
+      .gt('sm_total_games', 0)
+      .order('sm_total_earned', { ascending: false })
+      .limit(10);
+
+    const { data: stats } = await supabase
+      .from('bm_transactions')
+      .select('amount_micro')
+      .eq('game', 'swallow_me')
+      .eq('tx_type', 'sm_cashout');
+
+    const globalWinningsMicro = stats?.reduce((sum, t) => sum + Number(t.amount_micro || 0), 0) || 0;
+
+    return NextResponse.json({
+      leaderboard: leaderboard || [],
+      globalWinnings: globalWinningsMicro / 1_000_000,
+      globalWinningsMicro,
+    });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}

@@ -24,8 +24,12 @@ export class SnakeRoom extends Room<SnakeRoomState> {
   private gameInterval!: ReturnType<typeof setInterval>;
   private syncInterval!: ReturnType<typeof setInterval>;
   private botCheckInterval!: ReturnType<typeof setInterval>;
+  private healthInterval!: ReturnType<typeof setInterval>;
   private tier: number = 1;
   private botCounter: number = 0;
+  private healthLastTime: number = Date.now();
+  private healthTickCount: number = 0;
+  private killedThisTick = new Set<string>();
 
   // Interest management: track each client's viewport
   private clientViewports = new Map<string, ClientViewport>();
@@ -91,15 +95,38 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       this.handleCashout(client);
     });
 
+    // Health telemetry — log every 5 seconds
+    this.healthInterval = setInterval(() => {
+      const now = Date.now();
+      const elapsed = (now - this.healthLastTime) / 1000;
+      const tps = this.healthTickCount / elapsed;
+      this.healthLastTime = now;
+      this.healthTickCount = 0;
+
+      const alive = Array.from(this.serverSnakes.values()).filter(s => s.alive).length;
+      const total = this.serverSnakes.size;
+      const foodCount = this.serverFoods.size;
+      const mem = process.memoryUsage();
+      const heapMB = (mem.heapUsed / 1024 / 1024).toFixed(1);
+      const rssMB = (mem.rss / 1024 / 1024).toFixed(1);
+
+      console.log(
+        `[HEALTH] TPS=${tps.toFixed(1)} alive=${alive}/${total} food=${foodCount} heap=${heapMB}MB rss=${rssMB}MB`
+      );
+      if (tps < 25) {
+        console.warn(`[HEALTH:WARN] TPS dropped below 25! (${tps.toFixed(1)})`);
+      }
+    }, 5000);
+
     console.log(`[SnakeRoom] Created tier $${this.tier} room: ${this.roomId}`);
   }
 
-  async onJoin(client: Client, options: { wallet?: string; name?: string }) {
+  async onJoin(client: Client, options: { wallet?: string; name?: string; sessionId?: string; playerId?: string }) {
     const wallet = options.wallet || "unknown";
     const name = options.name || `player_${client.sessionId.slice(0, 6)}`;
     const tierConfig = TIER_CONFIG[this.tier];
 
-    console.log(`[SnakeRoom] ${name} joined (${client.sessionId})`);
+    console.log(`[SnakeRoom] ${name} joined (${client.sessionId}) session=${options.sessionId || 'none'}`);
 
     const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
     const snake = createSnake(
@@ -112,6 +139,11 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       false,
       0 // Player always gets rainbow skin (index 0)
     );
+
+    // Store settlement info from game entry
+    if (options.sessionId) snake.sessionId = options.sessionId;
+    if (options.playerId) snake.playerId = options.playerId;
+    snake.isSettling = false;
 
     this.serverSnakes.set(client.sessionId, snake);
 
@@ -131,6 +163,17 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     if (snake && snake.alive) {
       snake.alive = false;
       console.log(`[SnakeRoom] ${snake.name} left (forfeited $${snake.valueUsdc / 1_000_000})`);
+
+      // Settle forfeit for real-money players (fire and forget)
+      if (snake.playerId && snake.sessionId && !snake.isSettling) {
+        this.callSettle({
+          sessionId: snake.sessionId,
+          outcome: "forfeit",
+          cashoutAmountMicro: 0,
+          kills: snake.kills || 0,
+          durationMs: Date.now() - (snake.spawnTime || Date.now()),
+        }).catch((err) => console.error("[FORFEIT] Settlement failed:", err));
+      }
     }
 
     this.serverSnakes.delete(client.sessionId);
@@ -145,6 +188,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     clearInterval(this.gameInterval);
     clearInterval(this.syncInterval);
     clearInterval(this.botCheckInterval);
+    clearInterval(this.healthInterval);
 
     for (const [id, snake] of this.serverSnakes) {
       if (snake.isBot) removeBotState(id);
@@ -174,6 +218,8 @@ export class SnakeRoom extends Room<SnakeRoomState> {
   // ─── Game Loop ─────────────────────────────────────────
 
   private gameTick() {
+    this.healthTickCount++;
+    this.killedThisTick.clear();
     runGameTick(this.serverSnakes, this.serverFoods, GAME_CONFIG.ARENA_RADIUS, {
       onKill: (event) => this.handleKill(event),
       onBoostFoodDrop: (x, y) => {
@@ -212,9 +258,14 @@ export class SnakeRoom extends Room<SnakeRoomState> {
 
   private handleKill(event: KillEvent) {
     const victim = this.serverSnakes.get(event.victim);
-    if (!victim || !victim.alive) return;
+    if (!victim) return;
 
-    victim.alive = false; // mark first to make handler idempotent
+    // Don't kill players who are cashing out
+    if (victim.isSettling) return;
+
+    // Messaging-level dedupe: suppress duplicate kill events within the same tick
+    if (this.killedThisTick.has(event.victim)) return;
+    this.killedThisTick.add(event.victim);
 
     const tierConfig = TIER_CONFIG[this.tier];
     const rakeAmount = Math.floor(event.victimValue * tierConfig.rakeBps / 10000);
@@ -263,33 +314,134 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         kills: victim.kills,
       });
     }
+
+    // Settle death for real-money players (fire and forget)
+    if (!victim.isBot && victim.playerId && victim.sessionId && !victim.isSettling) {
+      const killer = event.killer ? this.serverSnakes.get(event.killer) : null;
+      this.callSettle({
+        sessionId: victim.sessionId,
+        outcome: "death",
+        cashoutAmountMicro: 0,
+        kills: victim.kills || 0,
+        durationMs: Date.now() - (victim.spawnTime || Date.now()),
+        diedTo: killer?.name || event.killerName || "Wall",
+      }).catch((err) => console.error("[DEATH] Settlement failed:", err));
+    }
+  }
+
+  // ─── Settlement API ────────────────────────────────────
+
+  private async callSettle(params: {
+    sessionId: string;
+    outcome: "cashout" | "death" | "forfeit";
+    cashoutAmountMicro?: number;
+    kills?: number;
+    durationMs?: number;
+    diedTo?: string;
+  }): Promise<any> {
+    const url = process.env.SETTLEMENT_API_URL;
+    const secret = process.env.GAME_SERVER_SECRET;
+    if (!url || !secret) {
+      console.error("[SETTLE] Missing SETTLEMENT_API_URL or GAME_SERVER_SECRET");
+      return null;
+    }
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-server-secret": secret,
+        },
+        body: JSON.stringify({
+          sessionId: params.sessionId,
+          outcome: params.outcome,
+          cashoutAmountMicro: params.cashoutAmountMicro || 0,
+          kills: params.kills || 0,
+          durationMs: params.durationMs || 0,
+          diedTo: params.diedTo || null,
+        }),
+      });
+      const result = await res.json();
+      return result;
+    } catch (err) {
+      console.error("[SETTLE] API call failed:", err);
+      return null;
+    }
   }
 
   // ─── Cashout Handler ───────────────────────────────────
 
-  private handleCashout(client: Client) {
+  private async handleCashout(client: Client) {
     const snake = this.serverSnakes.get(client.sessionId);
     if (!snake || !snake.alive) {
       client.send("cashout_error", { message: "Not alive" });
       return;
     }
 
+    if (snake.isSettling) {
+      client.send("cashout_error", { message: "Already settling" });
+      return;
+    }
+
+    // If no session info, do local-only cashout (non-real-money player)
+    if (!snake.sessionId || !snake.playerId) {
+      console.log(
+        `[Cashout] ${snake.name} cashing out $${(snake.valueUsdc / 1_000_000).toFixed(2)} (no session)`
+      );
+      snake.alive = false;
+      this.serverSnakes.delete(client.sessionId);
+      if (this.state.snakes.has(client.sessionId)) {
+        this.state.snakes.delete(client.sessionId);
+      }
+      this.updateCounts();
+      client.send("cashout_success", {
+        amount: snake.valueUsdc,
+        kills: snake.kills,
+        duration: Date.now() - snake.spawnTime,
+      });
+      return;
+    }
+
+    snake.isSettling = true;
+    const rawValue = Math.floor(snake.valueUsdc || 0);
+    const rake = Math.floor(rawValue * 0.10);
+    const cashoutMicro = rawValue - rake;
+    const kills = snake.kills || 0;
+    const duration = Date.now() - snake.spawnTime;
+
     console.log(
-      `[Cashout] ${snake.name} cashing out $${(snake.valueUsdc / 1_000_000).toFixed(2)}`
+      `[CASHOUT] Raw: ${rawValue}, Rake: ${rake} (10%), Payout: ${cashoutMicro}`
     );
 
-    snake.alive = false;
-    this.serverSnakes.delete(client.sessionId);
-    if (this.state.snakes.has(client.sessionId)) {
-      this.state.snakes.delete(client.sessionId);
-    }
-    this.updateCounts();
-
-    client.send("cashout_success", {
-      amount: snake.valueUsdc,
-      kills: snake.kills,
-      duration: Date.now() - snake.spawnTime,
+    const result = await this.callSettle({
+      sessionId: snake.sessionId,
+      outcome: "cashout",
+      cashoutAmountMicro: cashoutMicro,
+      kills,
+      durationMs: duration,
     });
+
+    if (result?.success) {
+      snake.alive = false;
+      this.serverSnakes.delete(client.sessionId);
+      if (this.state.snakes.has(client.sessionId)) {
+        this.state.snakes.delete(client.sessionId);
+      }
+      this.updateCounts();
+      client.send("cashout_success", {
+        amount: cashoutMicro,
+        kills,
+        duration,
+        txSignature: result.txSignature,
+      });
+    } else {
+      // Settlement failed — unlock, let them keep playing
+      snake.isSettling = false;
+      client.send("cashout_error", {
+        message: result?.error || "Settlement failed",
+      });
+    }
   }
 
   // ─── Bot Management ────────────────────────────────────

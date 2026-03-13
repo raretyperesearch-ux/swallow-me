@@ -27,6 +27,9 @@ export interface ServerSnake {
   lastInputTime: number;
   spawnTime: number;
   _boostDropCounter?: number;
+  sessionId?: string;   // sm_sessions.id from /api/game/enter
+  playerId?: string;    // bm_players.id from /api/game/enter
+  isSettling?: boolean;  // lock during settlement
 }
 
 export function createSnake(

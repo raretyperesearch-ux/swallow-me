@@ -142,7 +142,7 @@ export function checkSnakeCollisions(
           const key = `${id}:${otherId}:${i}`;
 
           // Deep overlap threshold: mixed abs/relative for all snake sizes
-          const deepThreshold = Math.max(2.0, killDist * 0.35);
+          const deepThreshold = Math.max(2.0, killDist * 0.2);
 
           if (penetration >= deepThreshold) {
             // DEEP HIT: instant kill (prevents high-speed pass-through)
@@ -164,7 +164,7 @@ export function checkSnakeCollisions(
             const count = prev + 1;
             nextCounts.set(key, count);
 
-            if (count >= 2 && !alreadyDead.has(id)) {
+            if (count >= 1 && !alreadyDead.has(id)) {
               console.log(`[KILL:shallow_persist] victim=${snake.name}(${id}) killer=${other.name}(${otherId}) seg=${i} dist=${actualDist.toFixed(1)} killDist=${killDist.toFixed(1)} pen=${penetration.toFixed(1)} ticks=${count}`);
               kills.push({
                 killer: otherId,
