@@ -11,7 +11,7 @@ interface SnakeGameProps {
   overlay?: ReactNode;
   voiceEnabled?: boolean;
   spectating?: boolean;
-  onSpectateUpdate?: (data: { topPlayerId: string; topPlayerName: string }) => void;
+  onSpectateUpdate?: (data: { name: string; value: number }) => void;
 }
 
 function isMobileDevice(): boolean {
@@ -64,14 +64,9 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnab
       // Set spectator mode if applicable
       if (spectating) {
         renderer.setSpectating(true);
-        room.onMessage("spectate_start", (data: any) => {
-          if (data.topPlayerId) renderer.setSpectateTarget(data.topPlayerId);
+        renderer.onSpectateTargetChange = (data) => {
           onSpectateUpdate?.(data);
-        });
-        room.onMessage("spectate_update", (data: any) => {
-          if (data.topPlayerId) renderer.setSpectateTarget(data.topPlayerId);
-          onSpectateUpdate?.(data);
-        });
+        };
       }
 
       // Wire voice mute click handler
@@ -81,6 +76,16 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnab
           voice.unmutePeer(sessionId);
         } else {
           voice.mutePeer(sessionId);
+        }
+      });
+
+      // Listen for cashout errors — dispatch toast event so page.tsx can show it
+      room.onMessage("cashout_error", (data: any) => {
+        console.error("[CASHOUT ERROR]", data);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("game-toast", {
+            detail: { message: data.message || "Cashout failed. Try again.", type: "error" },
+          }));
         }
       });
     });

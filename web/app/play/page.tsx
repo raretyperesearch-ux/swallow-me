@@ -64,6 +64,15 @@ export default function PlayPage() {
     }
   }, []);
 
+  // Listen for game toast events (from SnakeGame component)
+  useEffect(() => {
+    const handler = (e: any) => {
+      showToast(e.detail.message, e.detail.type);
+    };
+    window.addEventListener('game-toast', handler);
+    return () => window.removeEventListener('game-toast', handler);
+  }, []);
+
   // Post-login: register/find player + load data (waits for walletAddress from creation effect)
   useEffect(() => {
     if (!walletAddress || !authenticated || !ready) return;
@@ -477,17 +486,6 @@ export default function PlayPage() {
       setSpectating(true);
       setRoom(r);
       setPhase("spectating");
-
-      // Listen for spectate messages
-      r.onMessage("spectate_start", (data: any) => {
-        setSpectateInfo({ name: data.topPlayerName || "...", value: 0 });
-      });
-      r.onMessage("spectate_update", (data: any) => {
-        setSpectateInfo({
-          name: data.topPlayerName || "...",
-          value: (data.topPlayerValue || 0) / 1_000_000,
-        });
-      });
     } catch (err: any) {
       console.error("Failed to spectate:", err);
       showToast(err.message || "Failed to spectate", "error");
@@ -1613,7 +1611,7 @@ export default function PlayPage() {
 
       <button
         onClick={() => {
-          const text = `I just got swallowed on SwallowMe.gg! ${deathData?.kills || 0} kills before going down.`;
+          const text = `I just got swallowed on Swallow Me! ${deathData?.kills || 0} kills before going down. Think you can survive longer? \u{1F40D}\u{1F480} swallowme.ibuy.money`;
           window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
         }}
         className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
@@ -1717,7 +1715,7 @@ export default function PlayPage() {
 
       <button
         onClick={() => {
-          const text = `Just cashed out $${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)} on SwallowMe.gg!`;
+          const text = `Just cashed out $${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)} playing Swallow Me! Ate ${cashoutData?.kills || 0} snakes and walked away with real money \u{1F4B0}\u{1F40D} swallowme.ibuy.money`;
           window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
         }}
         className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
@@ -1743,11 +1741,10 @@ export default function PlayPage() {
       }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#FF4444', animation: 'pulse 2s infinite' }} />
         <span style={{ fontSize: 12, fontWeight: 700, color: '#FF4444', letterSpacing: 1 }}>SPECTATING</span>
-        {spectateInfo && (
-          <span style={{ fontSize: 12, color: '#999' }}>
-            {spectateInfo.name} &middot; ${spectateInfo.value.toFixed(2)}
-          </span>
-        )}
+        <span style={{ fontSize: 12, color: '#ccc' }}>
+          Watching: <span style={{ color: '#fff', fontWeight: 700 }}>{spectateInfo?.name || '...'}</span>
+          {spectateInfo ? <span style={{ color: '#00E676', fontWeight: 700 }}> (${spectateInfo.value.toFixed(2)})</span> : null}
+        </span>
       </div>
 
       {/* Bottom CTA */}
@@ -1823,8 +1820,8 @@ export default function PlayPage() {
           spectating={spectating}
           onSpectateUpdate={(data) => {
             setSpectateInfo({
-              name: data.topPlayerName || "...",
-              value: 0,
+              name: data.name || "...",
+              value: data.value || 0,
             });
           }}
         />

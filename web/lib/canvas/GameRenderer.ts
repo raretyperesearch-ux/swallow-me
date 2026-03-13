@@ -432,11 +432,15 @@ export class GameRenderer {
   // Spectator mode
   private spectating: boolean = false;
   private spectateTargetId: string = "";
+  private spectateTargets: string[] = [];
+  private spectateIndex: number = 0;
+  private lastSpectateCycle: number = 0;
 
   // Callbacks
   public onDeath?: (data: any) => void;
   public onCashout?: (data: any) => void;
   public onStatsUpdate?: (stats: { kills: number; value: number; alive: number; length: number; muted: boolean }) => void;
+  public onSpectateTargetChange?: (data: { name: string; value: number }) => void;
 
   constructor(container: HTMLDivElement, room: Colyseus.Room) {
     this.room = room;
@@ -1461,7 +1465,36 @@ export class GameRenderer {
       this.camX = this.deathCamX + this.shakeX;
       this.camY = this.deathCamY + this.shakeY;
     } else if (this.spectating) {
-      // Spectator mode: follow the target snake (top player)
+      // Spectator mode: cycle through alive snakes every 8 seconds
+      const now = Date.now();
+      const currentTarget = this.spectateTargetId ? this.localSnakes.get(this.spectateTargetId) : null;
+      const targetDied = currentTarget && !currentTarget.alive;
+      const needsCycle = this.spectateTargets.length === 0 ||
+        now - this.lastSpectateCycle > 8000 ||
+        targetDied;
+
+      if (needsCycle) {
+        // Rebuild target list from alive snakes
+        this.spectateTargets = [];
+        for (const [id, s] of this.localSnakes) {
+          if (s.alive) this.spectateTargets.push(id);
+        }
+        if (this.spectateTargets.length > 0) {
+          this.spectateIndex = (this.spectateIndex + 1) % this.spectateTargets.length;
+          this.spectateTargetId = this.spectateTargets[this.spectateIndex];
+          // Notify frontend of new target
+          const newTarget = this.localSnakes.get(this.spectateTargetId);
+          if (newTarget) {
+            this.onSpectateTargetChange?.({
+              name: newTarget.name,
+              value: newTarget.valueUsdc / 1_000_000,
+            });
+          }
+        }
+        this.lastSpectateCycle = now;
+      }
+
+      // Follow current target
       const target = this.spectateTargetId ? this.localSnakes.get(this.spectateTargetId) : null;
       if (target && target.alive) {
         this.camX += (target.headX - this.camX) * camLerp;
@@ -1470,19 +1503,6 @@ export class GameRenderer {
         this.targetZoom = Math.max(0.3, Math.min(0.5, 0.5 - (len - 40) / 600));
         this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
       } else {
-        // No target yet or target died — find highest value snake on screen
-        let bestSnake: any = null;
-        let bestValue = -1;
-        for (const [, s] of this.localSnakes) {
-          if (s.alive && s.valueUsdc > bestValue) {
-            bestValue = s.valueUsdc;
-            bestSnake = s;
-          }
-        }
-        if (bestSnake) {
-          this.camX += (bestSnake.headX - this.camX) * camLerp;
-          this.camY += (bestSnake.headY - this.camY) * camLerp;
-        }
         this.targetZoom = 0.4;
         this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
       }

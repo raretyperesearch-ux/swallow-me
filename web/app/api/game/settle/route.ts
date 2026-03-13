@@ -97,7 +97,35 @@ export async function POST(req: NextRequest) {
 
     // 6. CASHOUT — two-phase settlement
     if (outcome === 'cashout' && safeCashout > 0) {
-      // Phase 1: active → settling_cashout
+      // PRE-CHECK: Verify treasury can afford this BEFORE locking the session
+      const connection = new Connection(process.env.SOLANA_RPC_URL!, 'confirmed');
+      const USDC_MINT = new PublicKey(USDC_MINT_ADDR);
+      const { pubkey: TREASURY, keypair: TREASURY_KEY } = getTreasury();
+      const treasuryATA = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
+
+      try {
+        const treasuryBalance = await connection.getTokenAccountBalance(treasuryATA);
+        const treasuryMicro = Number(treasuryBalance.value.amount);
+        console.log('[SETTLE] Treasury balance:', treasuryMicro, 'needed:', safeCashout);
+
+        if (treasuryMicro < safeCashout) {
+          console.error('[SETTLE] TREASURY LOW! Have:', treasuryMicro, 'need:', safeCashout);
+          // DON'T change session status — leave it active so player can try again
+          return NextResponse.json({
+            error: 'Cashout temporarily unavailable. Please try again in a moment.',
+            retry: true,
+          }, { status: 503 });
+        }
+      } catch (balErr) {
+        console.error('[SETTLE] Treasury pre-check failed:', balErr);
+        // If we can't even check, don't proceed — leave session active
+        return NextResponse.json({
+          error: 'Cashout temporarily unavailable. Please try again.',
+          retry: true,
+        }, { status: 503 });
+      }
+
+      // Phase 1: active → settling_cashout (only after treasury pre-check passes)
       const { data: phase1, error: p1Err } = await supabase
         .from('sm_sessions')
         .update({
@@ -115,29 +143,6 @@ export async function POST(req: NextRequest) {
 
       if (p1Err || !phase1) {
         return NextResponse.json({ error: 'Race: session already settling' }, { status: 409 });
-      }
-
-      // Check treasury balance
-      const connection = new Connection(process.env.SOLANA_RPC_URL!, 'confirmed');
-      const USDC_MINT = new PublicKey(USDC_MINT_ADDR);
-      const { pubkey: TREASURY, keypair: TREASURY_KEY } = getTreasury();
-      const treasuryATA = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
-
-      try {
-        const treasuryAcct = await getAccount(connection, treasuryATA);
-        if (treasuryAcct.amount < BigInt(safeCashout)) {
-          await supabase.from('sm_sessions').update({
-            status: 'settlement_failed',
-            ended_at: new Date().toISOString(),
-          }).eq('id', sessionId);
-          return NextResponse.json({ error: 'Treasury insufficient' }, { status: 500 });
-        }
-      } catch (e) {
-        await supabase.from('sm_sessions').update({
-          status: 'settlement_failed',
-          ended_at: new Date().toISOString(),
-        }).eq('id', sessionId);
-        return NextResponse.json({ error: 'Treasury check failed' }, { status: 500 });
       }
 
       // Build transfer: treasury → player
@@ -168,12 +173,17 @@ export async function POST(req: NextRequest) {
         txSignature = await connection.sendRawTransaction(transferTx.serialize());
         await connection.confirmTransaction(txSignature, 'confirmed');
       } catch (e: any) {
+        console.error('[SETTLE] Transfer failed, reverting session to active:', e.message);
+        // REVERT session back to active so player can try again
         await supabase.from('sm_sessions').update({
-          status: 'settlement_failed',
-          cashout_tx_sig: 'FAILED:' + (e.message || 'unknown'),
-          ended_at: new Date().toISOString(),
+          status: 'active',
+          cashout_amount_micro: 0,
+          version: session.version + 1,
         }).eq('id', sessionId);
-        return NextResponse.json({ error: 'Transfer failed' }, { status: 500 });
+        return NextResponse.json({
+          error: 'Transfer failed. Your session is still active — try cashing out again.',
+          retry: true,
+        }, { status: 500 });
       }
 
       // Phase 2: settling_cashout → cashed_out

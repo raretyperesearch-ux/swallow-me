@@ -516,8 +516,10 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     } else {
       // Settlement failed — unlock, let them keep playing
       snake.isSettling = false;
+      console.error("[CASHOUT] Settlement failed:", result?.error || "unknown");
       client.send("cashout_error", {
-        message: result?.error || "Settlement failed",
+        message: result?.error || "Cashout failed. Try again.",
+        canRetry: true,
       });
     }
   }
