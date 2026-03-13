@@ -15,7 +15,7 @@ export async function joinRoom(
   tier: number,
   wallet: string,
   name: string,
-  extra?: { sessionId?: string; playerId?: string }
+  extra?: { sessionId?: string; playerId?: string; guest?: boolean; spectate?: boolean }
 ): Promise<Colyseus.Room> {
   const c = getClient();
   const roomName = `snake_${tier}`;
@@ -26,7 +26,8 @@ export async function joinRoom(
     ...extra,
   });
 
-  console.log(`[Colyseus] Joined room ${room.id} (tier $${tier})`);
+  const mode = extra?.spectate ? 'spectate' : extra?.guest ? 'guest' : `tier $${tier}`;
+  console.log(`[Colyseus] Joined room ${room.id} (${mode})`);
   return room;
 }
 

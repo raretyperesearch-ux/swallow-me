@@ -10,6 +10,8 @@ interface SnakeGameProps {
   onCashout: (data: any) => void;
   overlay?: ReactNode;
   voiceEnabled?: boolean;
+  spectating?: boolean;
+  onSpectateUpdate?: (data: { topPlayerId: string; topPlayerName: string }) => void;
 }
 
 function isMobileDevice(): boolean {
@@ -20,7 +22,7 @@ function isMobileDevice(): boolean {
   );
 }
 
-export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnabled = true }: SnakeGameProps) {
+export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnabled = true, spectating = false, onSpectateUpdate }: SnakeGameProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<any>(null);
   const [stats, setStats] = useState({ kills: 0, value: 0, alive: 0, length: 50, muted: false });
@@ -58,6 +60,19 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnab
       renderer.onCashout = onCashout;
       renderer.onStatsUpdate = setStats;
       rendererRef.current = renderer;
+
+      // Set spectator mode if applicable
+      if (spectating) {
+        renderer.setSpectating(true);
+        room.onMessage("spectate_start", (data: any) => {
+          if (data.topPlayerId) renderer.setSpectateTarget(data.topPlayerId);
+          onSpectateUpdate?.(data);
+        });
+        room.onMessage("spectate_update", (data: any) => {
+          if (data.topPlayerId) renderer.setSpectateTarget(data.topPlayerId);
+          onSpectateUpdate?.(data);
+        });
+      }
 
       // Wire voice mute click handler
       renderer.setVoiceMuteClickHandler((sessionId: string) => {
@@ -165,15 +180,17 @@ export default function SnakeGame({ room, onDeath, onCashout, overlay, voiceEnab
             {stats.muted ? "\u{1F507}" : "\u{1F50A}"}
           </button>
 
-          {/* Cash Out — pill shape */}
-          <button
-            onClick={handleCashout}
-            className={`pointer-events-auto bg-green-500 hover:bg-green-400 text-black font-bold rounded-full transition-colors shrink-0 ${
-              mobile ? "px-2.5 h-[30px] text-[11px] leading-none" : "px-5 py-2.5 text-sm"
-            }`}
-          >
-            {mobile ? `Cash $${stats.value.toFixed(2)}` : `Cash Out $${stats.value.toFixed(2)}`}
-          </button>
+          {/* Cash Out — pill shape (hidden for spectators) */}
+          {!spectating && (
+            <button
+              onClick={handleCashout}
+              className={`pointer-events-auto bg-green-500 hover:bg-green-400 text-black font-bold rounded-full transition-colors shrink-0 ${
+                mobile ? "px-2.5 h-[30px] text-[11px] leading-none" : "px-5 py-2.5 text-sm"
+              }`}
+            >
+              {mobile ? `Cash $${stats.value.toFixed(2)}` : `Cash Out $${stats.value.toFixed(2)}`}
+            </button>
+          )}
         </div>
       )}
     </div>

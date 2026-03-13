@@ -429,6 +429,10 @@ export class GameRenderer {
   private talkingArcs: Map<string, { age: number; maxAge: number }[]> = new Map();
   private lastTalkArcSpawn: Map<string, number> = new Map();
 
+  // Spectator mode
+  private spectating: boolean = false;
+  private spectateTargetId: string = "";
+
   // Callbacks
   public onDeath?: (data: any) => void;
   public onCashout?: (data: any) => void;
@@ -999,6 +1003,7 @@ export class GameRenderer {
 
   // Throttled input send — called from render loop, NOT from touch events
   private sendThrottledInput() {
+    if (this.spectating) return; // Spectators don't send input
     const now = Date.now();
     if (now - this.lastInputSend < this.INPUT_SEND_INTERVAL) return;
     this.lastInputSend = now;
@@ -1016,6 +1021,16 @@ export class GameRenderer {
 
   public isMuted(): boolean {
     return this.audio.muted;
+  }
+
+  // ─── Public: spectator mode ──────────────────────
+
+  public setSpectating(enabled: boolean) {
+    this.spectating = enabled;
+  }
+
+  public setSpectateTarget(targetId: string) {
+    this.spectateTargetId = targetId;
   }
 
   // ─── Public: voice chat state ─────────────────────
@@ -1445,6 +1460,40 @@ export class GameRenderer {
       // Hold camera at death position with shake
       this.camX = this.deathCamX + this.shakeX;
       this.camY = this.deathCamY + this.shakeY;
+    } else if (this.spectating) {
+      // Spectator mode: follow the target snake (top player)
+      const target = this.spectateTargetId ? this.localSnakes.get(this.spectateTargetId) : null;
+      if (target && target.alive) {
+        this.camX += (target.headX - this.camX) * camLerp;
+        this.camY += (target.headY - this.camY) * camLerp;
+        const len = target.serverLength || 40;
+        this.targetZoom = Math.max(0.3, Math.min(0.5, 0.5 - (len - 40) / 600));
+        this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
+      } else {
+        // No target yet or target died — find highest value snake on screen
+        let bestSnake: any = null;
+        let bestValue = -1;
+        for (const [, s] of this.localSnakes) {
+          if (s.alive && s.valueUsdc > bestValue) {
+            bestValue = s.valueUsdc;
+            bestSnake = s;
+          }
+        }
+        if (bestSnake) {
+          this.camX += (bestSnake.headX - this.camX) * camLerp;
+          this.camY += (bestSnake.headY - this.camY) * camLerp;
+        }
+        this.targetZoom = 0.4;
+        this.zoom += (this.targetZoom - this.zoom) * Math.min(1, 0.06 * dt * 60);
+      }
+
+      this.onStatsUpdate?.({
+        kills: 0,
+        value: 0,
+        alive: this.room.state.aliveCount || 0,
+        length: 0,
+        muted: this.audio.muted,
+      });
     } else if (camMe && camMe.alive) {
       this.camX += (camMe.headX - this.camX) * camLerp + this.shakeX;
       this.camY += (camMe.headY - this.camY) * camLerp + this.shakeY;

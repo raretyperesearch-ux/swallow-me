@@ -12,7 +12,7 @@ const SnakeGame = dynamic(() => import("../../components/SnakeGame"), {
   ssr: false,
 });
 
-type GamePhase = "lobby" | "playing" | "dead" | "cashout";
+type GamePhase = "lobby" | "playing" | "dead" | "cashout" | "spectating";
 
 export default function PlayPage() {
   const [phase, setPhase] = useState<GamePhase>("lobby");
@@ -43,6 +43,9 @@ export default function PlayPage() {
   const [cashOutAmount, setCashOutAmount] = useState('');
   const [cashingOut, setCashingOut] = useState(false);
   const [showBrowserWarning, setShowBrowserWarning] = useState(false);
+  const [isGuest, setIsGuest] = useState(false);
+  const [spectating, setSpectating] = useState(false);
+  const [spectateInfo, setSpectateInfo] = useState<{ name: string; value: number } | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "error" | "info" | "success" } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initRetryRef = useRef(0);
@@ -445,8 +448,53 @@ export default function PlayPage() {
     setRoom(null);
     setDeathData(null);
     setCashoutData(null);
+    setIsGuest(false);
+    setSpectating(false);
+    setSpectateInfo(null);
     setPhase("lobby");
   }, [room]);
+
+  const handleGuestJoin = async () => {
+    setConnecting(true);
+    try {
+      const guestName = playerData?.username || `guest_${Math.random().toString(36).slice(2, 8)}`;
+      const r = await joinRoom(1, "guest", guestName, { guest: true });
+      setIsGuest(true);
+      setRoom(r);
+      setPhase("playing");
+    } catch (err: any) {
+      console.error("Failed to join as guest:", err);
+      showToast(err.message || "Failed to join game", "error");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleSpectate = async () => {
+    setConnecting(true);
+    try {
+      const r = await joinRoom(1, "spectator", "Spectator", { spectate: true });
+      setSpectating(true);
+      setRoom(r);
+      setPhase("spectating");
+
+      // Listen for spectate messages
+      r.onMessage("spectate_start", (data: any) => {
+        setSpectateInfo({ name: data.topPlayerName || "...", value: 0 });
+      });
+      r.onMessage("spectate_update", (data: any) => {
+        setSpectateInfo({
+          name: data.topPlayerName || "...",
+          value: (data.topPlayerValue || 0) / 1_000_000,
+        });
+      });
+    } catch (err: any) {
+      console.error("Failed to spectate:", err);
+      showToast(err.message || "Failed to spectate", "error");
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   const handleSetUsername = async () => {
     const trimmed = usernameInput.trim();
@@ -640,6 +688,46 @@ export default function PlayPage() {
             <span style={{ position: "absolute", top: 0, left: "-80%", width: "60%", height: "100%", background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)", animation: "shineSweep 3s ease-in-out infinite" }} />
           )}
         </button>
+
+        {/* Guest + Spectate Row */}
+        <div style={{ display: "flex", gap: 10, width: "100%", maxWidth: 340 }}>
+          <button
+            onClick={handleGuestJoin}
+            disabled={connecting}
+            style={{
+              flex: 1,
+              padding: "12px 0",
+              borderRadius: 12,
+              border: "1px solid rgba(0,230,118,0.2)",
+              background: "rgba(0,230,118,0.08)",
+              color: "#00E676",
+              fontFamily: "'Russo One', sans-serif",
+              fontSize: 12,
+              letterSpacing: 1,
+              cursor: connecting ? "default" : "pointer",
+            }}
+          >
+            PLAY FREE
+          </button>
+          <button
+            onClick={handleSpectate}
+            disabled={connecting}
+            style={{
+              flex: 1,
+              padding: "12px 0",
+              borderRadius: 12,
+              border: "1px solid rgba(255,215,64,0.2)",
+              background: "rgba(255,215,64,0.08)",
+              color: "#FFD740",
+              fontFamily: "'Russo One', sans-serif",
+              fontSize: 12,
+              letterSpacing: 1,
+              cursor: connecting ? "default" : "pointer",
+            }}
+          >
+            WATCH LIVE
+          </button>
+        </div>
 
         {/* Mobile Wallet (hidden on desktop) */}
         <div style={{ display: "none", width: "100%", maxWidth: 340 }} className="mobile-wallet">
@@ -1421,13 +1509,34 @@ export default function PlayPage() {
           </div>
           <div className="text-xs text-gray-400">Survived</div>
         </div>
-        <div className="text-center">
-          <div className="text-2xl font-bold text-red-400">
-            -${((deathData?.valueUsdc || 0) / 1_000_000).toFixed(2)}
+        {!isGuest && (
+          <div className="text-center">
+            <div className="text-2xl font-bold text-red-400">
+              -${((deathData?.valueUsdc || 0) / 1_000_000).toFixed(2)}
+            </div>
+            <div className="text-xs text-gray-400">Lost</div>
           </div>
-          <div className="text-xs text-gray-400">Lost</div>
-        </div>
+        )}
       </div>
+
+      {isGuest && (
+        <div style={{
+          background: 'linear-gradient(180deg, rgba(255,105,180,0.1), rgba(255,105,180,0.05))',
+          border: '1px solid rgba(255,105,180,0.15)',
+          borderRadius: 12,
+          padding: '12px 20px',
+          marginBottom: 16,
+          textAlign: 'center' as const,
+          maxWidth: 300,
+        }}>
+          <div style={{ fontSize: 13, color: '#FF69B4', fontWeight: 700, marginBottom: 4 }}>
+            Ready to play for real?
+          </div>
+          <div style={{ fontSize: 11, color: '#888' }}>
+            Deposit $1 USDC and compete for real money
+          </div>
+        </div>
+      )}
 
       <button
         onClick={handlePlayAgain}
@@ -1619,16 +1728,108 @@ export default function PlayPage() {
     </div>
   ) : null;
 
-  // ─── Playing / Dead / Cashout — canvas stays alive ──
-  if ((phase === "playing" || phase === "dead" || phase === "cashout") && room) {
+  // ─── Spectator Overlay ─────────────────────────────
+  const spectatorOverlay = phase === "spectating" ? (
+    <div className="absolute inset-x-0 bottom-0 flex flex-col items-center z-50 pointer-events-none" style={{ paddingBottom: 40 }}>
+      {/* Top banner */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2" style={{
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(8px)',
+        borderRadius: 12,
+        padding: '8px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+      }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#FF4444', animation: 'pulse 2s infinite' }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#FF4444', letterSpacing: 1 }}>SPECTATING</span>
+        {spectateInfo && (
+          <span style={{ fontSize: 12, color: '#999' }}>
+            {spectateInfo.name} &middot; ${spectateInfo.value.toFixed(2)}
+          </span>
+        )}
+      </div>
+
+      {/* Bottom CTA */}
+      <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        <button
+          onClick={() => {
+            room?.leave();
+            setRoom(null);
+            setSpectating(false);
+            setSpectateInfo(null);
+            setPhase("lobby");
+          }}
+          style={{
+            padding: '14px 36px',
+            borderRadius: 12,
+            border: 'none',
+            background: 'linear-gradient(180deg, #FF69B4, #C71585)',
+            color: '#fff',
+            fontFamily: "'Russo One', sans-serif",
+            fontSize: 15,
+            letterSpacing: 2,
+            cursor: 'pointer',
+            boxShadow: '0 4px 0 #8B0A50',
+          }}
+        >
+          JOIN GAME
+        </button>
+        <button
+          onClick={handlePlayAgain}
+          style={{
+            padding: '8px 24px',
+            borderRadius: 8,
+            border: '1px solid rgba(255,255,255,0.1)',
+            background: 'transparent',
+            color: '#888',
+            fontSize: 12,
+            cursor: 'pointer',
+          }}
+        >
+          Back to Lobby
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  // ─── Guest HUD banner ───────────────────────────────
+  const guestBanner = isGuest && phase === "playing" ? (
+    <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50" style={{
+      marginTop: 60,
+      background: 'rgba(0,0,0,0.6)',
+      backdropFilter: 'blur(6px)',
+      borderRadius: 10,
+      padding: '6px 16px',
+      fontSize: 11,
+      fontWeight: 600,
+      color: '#FFD740',
+      letterSpacing: 1,
+    }}>
+      FREE PLAY &mdash; no real money
+    </div>
+  ) : null;
+
+  // ─── Playing / Dead / Cashout / Spectating — canvas stays alive ──
+  if ((phase === "playing" || phase === "dead" || phase === "cashout" || phase === "spectating") && room) {
     return (
-      <SnakeGame
-        room={room}
-        onDeath={handleDeath}
-        onCashout={handleCashout}
-        overlay={deathOverlay || cashoutOverlay}
-        voiceEnabled={voiceEnabled}
-      />
+      <>
+        <SnakeGame
+          room={room}
+          onDeath={handleDeath}
+          onCashout={handleCashout}
+          overlay={deathOverlay || cashoutOverlay || spectatorOverlay}
+          voiceEnabled={voiceEnabled}
+          spectating={spectating}
+          onSpectateUpdate={(data) => {
+            setSpectateInfo({
+              name: data.topPlayerName || "...",
+              value: 0,
+            });
+          }}
+        />
+        {guestBanner}
+      </>
     );
   }
 

@@ -121,12 +121,44 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     console.log(`[SnakeRoom] Created tier $${this.tier} room: ${this.roomId}`);
   }
 
-  async onJoin(client: Client, options: { wallet?: string; name?: string; sessionId?: string; playerId?: string }) {
+  // Track spectators (no snake, just watching)
+  private spectators = new Set<string>();
+  // Track guest players (play with bots, no real money)
+  private guests = new Set<string>();
+
+  async onJoin(client: Client, options: { wallet?: string; name?: string; sessionId?: string; playerId?: string; guest?: boolean; spectate?: boolean }) {
     const wallet = options.wallet || "unknown";
     const name = options.name || `player_${client.sessionId.slice(0, 6)}`;
     const tierConfig = TIER_CONFIG[this.tier];
 
-    console.log(`[SnakeRoom] ${name} joined (${client.sessionId}) session=${options.sessionId || 'none'}`);
+    // Spectate mode — no snake, just camera following top player
+    if (options.spectate) {
+      console.log(`[SnakeRoom] Spectator joined (${client.sessionId})`);
+      this.spectators.add(client.sessionId);
+
+      // Find the top snake to set initial viewport
+      const topSnake = this.getTopSnake();
+      const viewX = topSnake ? topSnake.headX : 0;
+      const viewY = topSnake ? topSnake.headY : 0;
+
+      this.clientViewports.set(client.sessionId, {
+        x: viewX,
+        y: viewY,
+        w: 1920,
+        h: 1080,
+      });
+
+      // Tell client they're spectating and who the top player is
+      client.send("spectate_start", {
+        topPlayerId: topSnake ? topSnake.id : null,
+        topPlayerName: topSnake ? topSnake.name : null,
+      });
+
+      this.updateCounts();
+      return;
+    }
+
+    console.log(`[SnakeRoom] ${name} joined (${client.sessionId}) session=${options.sessionId || 'none'} guest=${!!options.guest}`);
 
     const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
     const snake = createSnake(
@@ -135,7 +167,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       wallet,
       spawn.x,
       spawn.y,
-      tierConfig.entryAmount,
+      options.guest ? tierConfig.entryAmount : tierConfig.entryAmount, // same initial value for display
       false,
       0 // Player always gets rainbow skin (index 0)
     );
@@ -144,6 +176,11 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     if (options.sessionId) snake.sessionId = options.sessionId;
     if (options.playerId) snake.playerId = options.playerId;
     snake.isSettling = false;
+
+    // Mark as guest — no settlement on death
+    if (options.guest) {
+      this.guests.add(client.sessionId);
+    }
 
     this.serverSnakes.set(client.sessionId, snake);
 
@@ -159,13 +196,22 @@ export class SnakeRoom extends Room<SnakeRoomState> {
   }
 
   onLeave(client: Client, consented: boolean) {
+    // Spectator leaving — just clean up viewport
+    if (this.spectators.has(client.sessionId)) {
+      this.spectators.delete(client.sessionId);
+      this.clientViewports.delete(client.sessionId);
+      this.updateCounts();
+      return;
+    }
+
+    const isGuest = this.guests.has(client.sessionId);
     const snake = this.serverSnakes.get(client.sessionId);
     if (snake && snake.alive) {
       snake.alive = false;
-      console.log(`[SnakeRoom] ${snake.name} left (forfeited $${snake.valueUsdc / 1_000_000})`);
+      console.log(`[SnakeRoom] ${snake.name} left (forfeited $${snake.valueUsdc / 1_000_000})${isGuest ? ' [GUEST]' : ''}`);
 
-      // Settle forfeit for real-money players (fire and forget)
-      if (snake.playerId && snake.sessionId && !snake.isSettling) {
+      // Settle forfeit for real-money players only (not guests)
+      if (!isGuest && snake.playerId && snake.sessionId && !snake.isSettling) {
         this.callSettle({
           sessionId: snake.sessionId,
           outcome: "forfeit",
@@ -176,6 +222,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       }
     }
 
+    this.guests.delete(client.sessionId);
     this.serverSnakes.delete(client.sessionId);
     if (this.state.snakes.has(client.sessionId)) {
       this.state.snakes.delete(client.sessionId);
@@ -196,8 +243,21 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     this.serverSnakes.clear();
     this.serverFoods.clear();
     this.clientViewports.clear();
+    this.spectators.clear();
+    this.guests.clear();
 
     console.log(`[SnakeRoom] Disposed tier $${this.tier} room: ${this.roomId}`);
+  }
+
+  // ─── Helper: get top alive snake by value ─────────────
+  private getTopSnake(): ServerSnake | null {
+    let top: ServerSnake | null = null;
+    for (const [, snake] of this.serverSnakes) {
+      if (snake.alive && (!top || snake.valueUsdc > top.valueUsdc)) {
+        top = snake;
+      }
+    }
+    return top;
   }
 
   // ─── Individual Food State Helpers ─────────────────────
@@ -315,8 +375,8 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       });
     }
 
-    // Settle death for real-money players (fire and forget)
-    if (!victim.isBot && victim.playerId && victim.sessionId && !victim.isSettling) {
+    // Settle death for real-money players only — skip bots and guests (fire and forget)
+    if (!victim.isBot && !this.guests.has(event.victim) && victim.playerId && victim.sessionId && !victim.isSettling) {
       const killer = event.killer ? this.serverSnakes.get(event.killer) : null;
       this.callSettle({
         sessionId: victim.sessionId,
@@ -381,6 +441,24 @@ export class SnakeRoom extends Room<SnakeRoomState> {
 
     if (snake.isSettling) {
       client.send("cashout_error", { message: "Already settling" });
+      return;
+    }
+
+    // Guest players can't cash out real money
+    if (this.guests.has(client.sessionId)) {
+      snake.alive = false;
+      this.serverSnakes.delete(client.sessionId);
+      if (this.state.snakes.has(client.sessionId)) {
+        this.state.snakes.delete(client.sessionId);
+      }
+      this.guests.delete(client.sessionId);
+      this.updateCounts();
+      client.send("cashout_success", {
+        amount: 0,
+        kills: snake.kills,
+        duration: Date.now() - snake.spawnTime,
+        guest: true,
+      });
       return;
     }
 
@@ -604,5 +682,31 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
     this.state.playerCount = players;
     this.state.aliveCount = alive;
+
+    // Update spectators with current top player info
+    if (this.spectators.size > 0) {
+      const topSnake = this.getTopSnake();
+      if (topSnake) {
+        for (const specId of this.spectators) {
+          const client = this.clients.find((c) => c.sessionId === specId);
+          if (client) {
+            client.send("spectate_update", {
+              topPlayerId: topSnake.id,
+              topPlayerName: topSnake.name,
+              topPlayerValue: topSnake.valueUsdc,
+              topPlayerX: topSnake.headX,
+              topPlayerY: topSnake.headY,
+            });
+            // Update spectator viewport to follow top player
+            this.clientViewports.set(specId, {
+              x: topSnake.headX,
+              y: topSnake.headY,
+              w: 1920,
+              h: 1080,
+            });
+          }
+        }
+      }
+    }
   }
 }
