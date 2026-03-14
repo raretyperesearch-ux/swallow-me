@@ -452,14 +452,9 @@ function PlayPageContent() {
       setShowUsernameModal(true);
       return;
     }
-    if (usdcBalance < 1.0) {
-      setShowFundsModal(true);
-      return;
-    }
-
     setConnecting(true);
     try {
-      const { Connection, PublicKey, Transaction } = await import("@solana/web3.js");
+      const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
       const { getAssociatedTokenAddress, createTransferInstruction } = await import("@solana/spl-token");
 
       // Canonical signer — always from live wallets array
@@ -483,12 +478,13 @@ function PlayPageContent() {
       }
 
       // Check SOL balance for gas fees
+      let liveSolBalance = solBalance;
       try {
-        const solBalance = await connection.getBalance(signerPubkey);
-        const solAmount = solBalance / 1_000_000_000;
-        console.log('[JOIN] SOL balance:', solAmount);
+        const solLamports = await connection.getBalance(signerPubkey);
+        liveSolBalance = solLamports / LAMPORTS_PER_SOL;
+        console.log('[JOIN] SOL balance:', liveSolBalance);
 
-        if (solAmount < 0.005) {
+        if (liveSolBalance < 0.005) {
           showToast('You need SOL for transaction fees. Send at least 0.01 SOL to your wallet.', 'error');
           setConnecting(false);
           return;
@@ -497,17 +493,69 @@ function PlayPageContent() {
         console.error('[JOIN] SOL balance check failed:', e);
       }
 
-      const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      // Decide payment type: USDC preferred, SOL as fallback
+      let paymentType: "usdc" | "sol" = "usdc";
+      let solNeededLamports = 0;
+      let currentSolPrice = 0;
+
+      if (usdcBalance >= 1.0) {
+        paymentType = "usdc";
+      } else {
+        // Not enough USDC — try SOL
+        currentSolPrice = solPrice;
+
+        // Fetch fresh price if needed
+        if (!currentSolPrice || currentSolPrice <= 0) {
+          try {
+            const priceRes = await fetch("https://price.jup.ag/v6/price?ids=SOL");
+            const priceData = await priceRes.json();
+            currentSolPrice = Number(priceData?.data?.SOL?.price || 0);
+          } catch {
+            showToast("Could not fetch SOL price. Please try again.", "error");
+            setConnecting(false);
+            return;
+          }
+        }
+
+        if (!currentSolPrice || currentSolPrice <= 0) {
+          showToast("Could not fetch SOL price. Please try again.", "error");
+          setConnecting(false);
+          return;
+        }
+
+        // $1.00 worth of SOL + 2% slippage buffer
+        const solNeeded = (1.0 / currentSolPrice) * 1.02;
+        solNeededLamports = Math.ceil(solNeeded * 1e9);
+        const gasBuffer = 0.005;
+
+        if (liveSolBalance < solNeeded + gasBuffer) {
+          showToast(`Need $1.00 in USDC or ~${solNeeded.toFixed(4)} SOL to play`, "error");
+          setConnecting(false);
+          return;
+        }
+
+        paymentType = "sol";
+        console.log('[JOIN] Paying with SOL:', solNeeded.toFixed(6), 'SOL at $' + currentSolPrice);
+      }
+
       const TREASURY = new PublicKey("53Qy2ygocLjKWbtjgaepzHfZnf9oiZENJPWMnNUkSz8L");
+      const tx = new Transaction();
 
-      const playerATA = await getAssociatedTokenAddress(USDC_MINT, signerPubkey);
-      const treasuryATA = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
+      if (paymentType === "usdc") {
+        // === USDC transfer ===
+        const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        const playerATA = await getAssociatedTokenAddress(USDC_MINT, signerPubkey);
+        const treasuryATA = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
+        tx.add(createTransferInstruction(playerATA, treasuryATA, signerPubkey, 1_000_000));
+      } else {
+        // === SOL transfer ===
+        tx.add(SystemProgram.transfer({
+          fromPubkey: signerPubkey,
+          toPubkey: TREASURY,
+          lamports: solNeededLamports,
+        }));
+      }
 
-      const transferIx = createTransferInstruction(
-        playerATA, treasuryATA, signerPubkey, 1_000_000
-      );
-
-      const tx = new Transaction().add(transferIx);
       tx.feePayer = signerPubkey;
 
       // Retry loop with fresh blockhash each attempt
@@ -622,7 +670,12 @@ function PlayPageContent() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({ txSignature: signature }),
+        body: JSON.stringify({
+          txSignature: signature,
+          paymentType,
+          solLamports: paymentType === "sol" ? solNeededLamports : undefined,
+          solPrice: paymentType === "sol" ? currentSolPrice : undefined,
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -636,7 +689,12 @@ function PlayPageContent() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify({ txSignature: signature }),
+            body: JSON.stringify({
+              txSignature: signature,
+              paymentType,
+              solLamports: paymentType === "sol" ? solNeededLamports : undefined,
+              solPrice: paymentType === "sol" ? currentSolPrice : undefined,
+            }),
           });
           const data2 = await res2.json();
           if (!data2.success) throw new Error(data2.error || 'Failed to enter game');

@@ -51,9 +51,9 @@ export async function POST(req: NextRequest) {
     if (!player) return NextResponse.json({ error: 'Register first' }, { status: 404 });
     if (!player.username) return NextResponse.json({ error: 'Set username first' }, { status: 400 });
 
-    // 4. Get tx signature from client
+    // 4. Get tx signature and payment type from client
     const body = await req.json();
-    const { txSignature } = body;
+    const { txSignature, paymentType = 'usdc', solLamports: clientSolLamports, solPrice: clientSolPrice } = body;
     if (!txSignature || typeof txSignature !== 'string') {
       return NextResponse.json({ error: 'Missing transaction signature' }, { status: 400 });
     }
@@ -92,31 +92,68 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Transaction too old' }, { status: 400 });
     }
 
-    // 5b. Verify transfer: $1 USDC to treasury
+    // 5b. Verify payment
     const TREASURY_ADDRESS = '53Qy2ygocLjKWbtjgaepzHfZnf9oiZENJPWMnNUkSz8L';
-    const USDC_MINT_ADDRESS = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-    const REQUIRED_AMOUNT = 1_000_000;
-
     let transferVerified = false;
 
-    if (txInfo.meta?.postTokenBalances && txInfo.meta?.preTokenBalances) {
-      for (const post of txInfo.meta.postTokenBalances) {
-        if (post.mint === USDC_MINT_ADDRESS && post.owner === TREASURY_ADDRESS) {
-          const pre = txInfo.meta.preTokenBalances.find(
-            (p: any) => p.accountIndex === post.accountIndex
-          );
-          const preAmount = pre?.uiTokenAmount?.amount ? parseInt(pre.uiTokenAmount.amount) : 0;
-          const postAmount = post.uiTokenAmount?.amount ? parseInt(post.uiTokenAmount.amount) : 0;
-          const diff = postAmount - preAmount;
-          if (diff >= REQUIRED_AMOUNT) {
-            transferVerified = true;
+    if (paymentType === 'sol') {
+      // === SOL payment verification ===
+      const accountKeys = txInfo.transaction?.message?.accountKeys || [];
+      let treasuryIndex = -1;
+
+      for (let i = 0; i < accountKeys.length; i++) {
+        const key = accountKeys[i];
+        const address = typeof key === 'string' ? key : (key.pubkey ? key.pubkey.toBase58() : String(key));
+        if (address === TREASURY_ADDRESS) {
+          treasuryIndex = i;
+          break;
+        }
+      }
+
+      if (treasuryIndex === -1) {
+        console.error('[ENTER] Treasury not found in SOL transaction accounts');
+        return NextResponse.json({ error: 'Invalid payment — treasury not in transaction' }, { status: 400 });
+      }
+
+      const preBalance = txInfo.meta?.preBalances?.[treasuryIndex] || 0;
+      const postBalance = txInfo.meta?.postBalances?.[treasuryIndex] || 0;
+      const receivedLamports = postBalance - preBalance;
+
+      // Verify at least $0.90 worth of SOL was received (10% slippage tolerance)
+      const solPriceForVerify = clientSolPrice && clientSolPrice > 0 ? clientSolPrice : 150;
+      const minAcceptable = Math.floor((0.90 / solPriceForVerify) * 1e9);
+
+      if (receivedLamports < minAcceptable) {
+        console.error('[ENTER] Insufficient SOL received:', receivedLamports, 'minimum:', minAcceptable, 'at price:', solPriceForVerify);
+        return NextResponse.json({ error: 'Insufficient SOL payment' }, { status: 400 });
+      }
+
+      console.log('[ENTER] SOL payment verified:', receivedLamports, 'lamports at $' + solPriceForVerify + '/SOL');
+      transferVerified = true;
+    } else {
+      // === USDC payment verification (existing) ===
+      const USDC_MINT_ADDRESS = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+      const REQUIRED_AMOUNT = 1_000_000;
+
+      if (txInfo.meta?.postTokenBalances && txInfo.meta?.preTokenBalances) {
+        for (const post of txInfo.meta.postTokenBalances) {
+          if (post.mint === USDC_MINT_ADDRESS && post.owner === TREASURY_ADDRESS) {
+            const pre = txInfo.meta.preTokenBalances.find(
+              (p: any) => p.accountIndex === post.accountIndex
+            );
+            const preAmount = pre?.uiTokenAmount?.amount ? parseInt(pre.uiTokenAmount.amount) : 0;
+            const postAmount = post.uiTokenAmount?.amount ? parseInt(post.uiTokenAmount.amount) : 0;
+            const diff = postAmount - preAmount;
+            if (diff >= REQUIRED_AMOUNT) {
+              transferVerified = true;
+            }
           }
         }
       }
     }
 
     if (!transferVerified) {
-      return NextResponse.json({ error: 'Invalid transfer: must be $1 USDC to treasury' }, { status: 400 });
+      return NextResponse.json({ error: paymentType === 'sol' ? 'Invalid SOL payment to treasury' : 'Invalid transfer: must be $1 USDC to treasury' }, { status: 400 });
     }
 
     // 5c. Verify player signed the transaction
@@ -163,6 +200,9 @@ export async function POST(req: NextRequest) {
         status: 'active',
         entry_amount_micro: ENTRY_MICRO,
         entry_tx_sig: txSignature,
+        payment_type: paymentType,
+        entry_sol_lamports: paymentType === 'sol' ? (clientSolLamports || 0) : 0,
+        sol_price_at_entry: paymentType === 'sol' ? (clientSolPrice || 0) : 0,
       })
       .select('id')
       .single();
