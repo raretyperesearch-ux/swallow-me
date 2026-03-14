@@ -126,7 +126,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Transaction not signed by your wallet' }, { status: 400 });
     }
 
-    // 6. Create session (unique index prevents double-join)
+    // 6. Auto-forfeit stale active sessions before creating a new one
+    const { data: activeSession } = await supabase
+      .from('sm_sessions')
+      .select('id, created_at')
+      .eq('player_id', player.id)
+      .eq('status', 'active')
+      .single();
+
+    if (activeSession) {
+      const sessionAge = Date.now() - new Date(activeSession.created_at).getTime();
+      const TEN_MINUTES = 10 * 60 * 1000;
+
+      if (sessionAge > TEN_MINUTES) {
+        // Auto-forfeit stale session so player can re-enter
+        await supabase
+          .from('sm_sessions')
+          .update({ status: 'forfeited', ended_at: new Date().toISOString(), version: 2 })
+          .eq('id', activeSession.id)
+          .eq('status', 'active');
+
+        // Clear stale enter idempotency
+        await supabase.from('sm_idempotency').delete().eq('idempotency_key', `enter:${player.id}`);
+
+        console.log('[ENTER] Auto-forfeited stale session:', activeSession.id);
+      } else {
+        return NextResponse.json({ error: 'Already in an active game' }, { status: 409 });
+      }
+    }
+
+    // Create session (unique index prevents double-join)
     const { data: session, error: sessErr } = await supabase
       .from('sm_sessions')
       .insert({
