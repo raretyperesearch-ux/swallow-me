@@ -1472,8 +1472,8 @@ function PlayPageContent() {
                 {cashOutToken === 'sol' && ' \u2022 0.005 SOL reserved for gas'}
               </div>
               {cashOutToken === 'sol' && cashOutAmount && Number(cashOutAmount) > 0 && (
-                <div style={{ fontSize: 9, color: '#555', textAlign: 'left' as const, marginBottom: 10 }}>
-                  \u2248 ${(Number(cashOutAmount) * solPrice).toFixed(2)} USD
+                <div style={{ fontSize: 9, color: '#00E676', textAlign: 'left' as const, marginBottom: 10 }}>
+                  ≈ ${(Number(cashOutAmount) * solPrice).toFixed(2)} USD
                 </div>
               )}
               <div style={{ marginTop: cashOutToken === 'usdc' ? 12 : 4 }} />
