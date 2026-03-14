@@ -31,6 +31,10 @@ function PlayPageContent() {
   const { fundWallet } = useFundWallet();
   const [playerData, setPlayerData] = useState<any>(null);
   const [usdcBalance, setUsdcBalance] = useState<number>(0);
+  const [solBalance, setSolBalance] = useState<number>(0);
+  const [solPrice, setSolPrice] = useState<number>(0);
+  const [totalBalanceUsd, setTotalBalanceUsd] = useState<number>(0);
+  const [cashOutToken, setCashOutToken] = useState<"usdc" | "sol">("usdc");
   const [walletAddress, setWalletAddress] = useState<string>("");
   const [showUsernameModal, setShowUsernameModal] = useState(false);
   const [usernameInput, setUsernameInput] = useState("");
@@ -228,10 +232,12 @@ function PlayPageContent() {
       login();
       return;
     }
-    if (usdcBalance <= 0) {
+    if (usdcBalance <= 0.01 && solBalance <= 0.005) {
       showToast("No funds to withdraw.", "info");
       return;
     }
+    setCashOutToken(usdcBalance >= 0.01 ? "usdc" : "sol");
+    setCashOutAmount("");
     setShowCashOutModal(true);
   };
 
@@ -241,14 +247,15 @@ function PlayPageContent() {
       showToast("Enter a valid Solana wallet address", "error");
       return;
     }
-    if (!amount || amount <= 0 || amount > usdcBalance) {
+    const maxAmount = cashOutToken === "usdc" ? usdcBalance : (solBalance - 0.005);
+    if (!amount || amount <= 0 || amount > maxAmount) {
       showToast("Enter a valid amount", "error");
       return;
     }
 
     setCashingOut(true);
     try {
-      const { Connection, PublicKey, Transaction } = await import("@solana/web3.js");
+      const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
       const { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction, getAccount } = await import("@solana/spl-token");
 
       // Canonical signer — always from live wallets array
@@ -265,7 +272,6 @@ function PlayPageContent() {
         "confirmed"
       );
 
-      const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
       let destPubkey: InstanceType<typeof PublicKey>;
       try {
         destPubkey = new PublicKey(cashOutAddress);
@@ -273,22 +279,34 @@ function PlayPageContent() {
         throw new Error("Invalid destination address");
       }
 
-      const sourceATA = await getAssociatedTokenAddress(USDC_MINT, signerPubkey);
-      const destATA = await getAssociatedTokenAddress(USDC_MINT, destPubkey);
-
-      const amountMicro = Math.floor(amount * 1_000_000);
       const tx = new Transaction();
 
-      // Create destination ATA if it doesn't exist — payer is signer
-      try {
-        await getAccount(connection, destATA);
-      } catch {
-        tx.add(
-          createAssociatedTokenAccountInstruction(signerPubkey, destATA, destPubkey, USDC_MINT)
-        );
-      }
+      if (cashOutToken === "usdc") {
+        // === USDC withdrawal ===
+        const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        const sourceATA = await getAssociatedTokenAddress(USDC_MINT, signerPubkey);
+        const destATA = await getAssociatedTokenAddress(USDC_MINT, destPubkey);
+        const amountMicro = Math.floor(amount * 1_000_000);
 
-      tx.add(createTransferInstruction(sourceATA, destATA, signerPubkey, amountMicro));
+        // Create destination ATA if it doesn't exist — payer is signer
+        try {
+          await getAccount(connection, destATA);
+        } catch {
+          tx.add(
+            createAssociatedTokenAccountInstruction(signerPubkey, destATA, destPubkey, USDC_MINT)
+          );
+        }
+
+        tx.add(createTransferInstruction(sourceATA, destATA, signerPubkey, amountMicro));
+      } else {
+        // === SOL transfer ===
+        const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
+        tx.add(SystemProgram.transfer({
+          fromPubkey: signerPubkey,
+          toPubkey: destPubkey,
+          lamports,
+        }));
+      }
 
       const { blockhash } = await connection.getLatestBlockhash("confirmed");
       tx.recentBlockhash = blockhash;
@@ -296,7 +314,7 @@ function PlayPageContent() {
 
       // Preflight guard
       const accountKeys = tx.compileMessage().accountKeys.map((k) => k.toBase58());
-      console.log('[TX DEBUG cashout] signer:', embeddedWallet.address, 'feePayer:', tx.feePayer?.toBase58?.(), 'keys:', accountKeys);
+      console.log('[TX DEBUG cashout] token:', cashOutToken, 'signer:', embeddedWallet.address, 'feePayer:', tx.feePayer?.toBase58?.(), 'keys:', accountKeys);
 
       if (!accountKeys.includes(signerPubkey.toBase58())) {
         console.error('[TX] cashout signer missing from account keys');
@@ -321,7 +339,8 @@ function PlayPageContent() {
       const signature = (result as any).signature || String(result);
       console.log("[CASHOUT] Withdrawal sent:", signature);
 
-      showToast(`Withdrawal sent! ${amount.toFixed(2)} USDC`, "success");
+      const tokenName = cashOutToken === "usdc" ? "USDC" : "SOL";
+      showToast(`Sent ${cashOutAmount} ${tokenName} successfully!`, "success");
       setShowCashOutModal(false);
       setCashOutAddress("");
       setCashOutAmount("");
@@ -366,7 +385,7 @@ function PlayPageContent() {
     const addr = signer?.address || walletAddress;
     if (!addr) return;
     try {
-      const { Connection, PublicKey } = await import("@solana/web3.js");
+      const { Connection, PublicKey, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
       const { getAssociatedTokenAddress } = await import("@solana/spl-token");
       const connection = new Connection(
         process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
@@ -374,10 +393,34 @@ function PlayPageContent() {
       );
       const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
       const playerPubkey = new PublicKey(addr);
+
+      // Fetch USDC balance
       const ata = await getAssociatedTokenAddress(USDC_MINT, playerPubkey);
       const tokenAccount = await connection.getTokenAccountBalance(ata).catch(() => null);
-      const balance = tokenAccount ? Number(tokenAccount.value.uiAmount || 0) : 0;
-      setUsdcBalance(balance);
+      const usdc = tokenAccount ? Number(tokenAccount.value.uiAmount || 0) : 0;
+
+      // Fetch SOL balance
+      const solLamports = await connection.getBalance(playerPubkey);
+      const sol = solLamports / LAMPORTS_PER_SOL;
+
+      // Fetch SOL price from Jupiter
+      let price = solPrice || 150;
+      try {
+        const priceRes = await fetch("https://price.jup.ag/v6/price?ids=SOL");
+        const priceData = await priceRes.json();
+        price = Number(priceData?.data?.SOL?.price || price);
+      } catch {
+        // keep previous or fallback
+      }
+
+      const solUsd = sol * price;
+      const total = usdc + solUsd;
+
+      setUsdcBalance(usdc);
+      setSolBalance(sol);
+      setSolPrice(price);
+      setTotalBalanceUsd(total);
+
       // Keep walletAddress state in sync
       if (signer?.address && signer.address !== walletAddress) {
         console.log('[WALLET] Syncing stale walletAddress state:', walletAddress, '->', signer.address);
@@ -387,6 +430,8 @@ function PlayPageContent() {
     } catch (err) {
       console.error("[REFRESH] Failed:", err);
       setUsdcBalance(0);
+      setSolBalance(0);
+      setTotalBalanceUsd(0);
       if (!silent) showToast("Failed to refresh balance", "error");
     }
   };
@@ -775,10 +820,26 @@ function PlayPageContent() {
             {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
           </div>
         )}
-        <div style={{ fontSize: 32, fontWeight: 800, background: "linear-gradient(180deg, #fff 0%, #bbb 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", marginBottom: 4 }}>
-          ${usdcBalance.toFixed(2)}
+        <div style={{ fontSize: 30, fontWeight: 900, background: "linear-gradient(180deg, #fff, #eee, #ccc)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", marginBottom: 4 }}>
+          ${totalBalanceUsd.toFixed(2)}
         </div>
-        <div style={{ fontSize: 13, color: "#666", marginBottom: 16 }}>{usdcBalance.toFixed(4)} USDC</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center", flexWrap: "wrap" as const, marginBottom: 12 }}>
+          {usdcBalance > 0.01 && (
+            <span style={{ fontSize: 11, color: "#888" }}>{usdcBalance.toFixed(4)} USDC</span>
+          )}
+          {usdcBalance > 0.01 && solBalance > 0.001 && (
+            <span style={{ fontSize: 11, color: "#333" }}>+</span>
+          )}
+          {solBalance > 0.001 && (
+            <span style={{ fontSize: 11, color: "#888" }}>
+              {solBalance.toFixed(4)} SOL
+              <span style={{ fontSize: 9, color: "#555" }}> (${(solBalance * solPrice).toFixed(2)})</span>
+            </span>
+          )}
+          {usdcBalance <= 0.01 && solBalance <= 0.001 && (
+            <span style={{ fontSize: 11, color: "#555" }}>No funds</span>
+          )}
+        </div>
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={handleAddFunds} style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: "linear-gradient(180deg, #00E676 0%, #00C853 100%)", color: "#000", fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 4px 0 #009624" }}>Add Funds</button>
           <button onClick={handleCashOut} style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: "linear-gradient(180deg, #AB47BC 0%, #7B1FA2 100%)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", boxShadow: "0 4px 0 #4A148C" }}>Cash Out</button>
@@ -1293,10 +1354,42 @@ function PlayPageContent() {
               textAlign: 'center' as const,
             }} onClick={e => e.stopPropagation()}>
               <div style={{ fontSize: 18, fontWeight: 900, color: '#fff', marginBottom: 4 }}>
-                Withdraw USDC
+                Withdraw
               </div>
-              <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
-                Send USDC from your embedded wallet to any Solana address
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 16 }}>
+                Send funds from your wallet to any Solana address
+              </div>
+
+              {/* Token selector tabs */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                <button
+                  onClick={() => { setCashOutToken('usdc'); setCashOutAmount(''); }}
+                  disabled={cashingOut}
+                  style={{
+                    flex: 1, padding: '8px 0', borderRadius: 8,
+                    border: cashOutToken === 'usdc' ? '2px solid #2775CA' : '1px solid rgba(255,255,255,0.06)',
+                    background: cashOutToken === 'usdc' ? 'rgba(39,117,202,0.1)' : 'transparent',
+                    color: cashOutToken === 'usdc' ? '#2775CA' : '#555',
+                    fontSize: 11, fontWeight: 700, cursor: cashingOut ? 'default' : 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  USDC (${usdcBalance.toFixed(2)})
+                </button>
+                <button
+                  onClick={() => { setCashOutToken('sol'); setCashOutAmount(''); }}
+                  disabled={cashingOut}
+                  style={{
+                    flex: 1, padding: '8px 0', borderRadius: 8,
+                    border: cashOutToken === 'sol' ? '2px solid #9945FF' : '1px solid rgba(255,255,255,0.06)',
+                    background: cashOutToken === 'sol' ? 'rgba(153,69,255,0.1)' : 'transparent',
+                    color: cashOutToken === 'sol' ? '#9945FF' : '#555',
+                    fontSize: 11, fontWeight: 700, cursor: cashingOut ? 'default' : 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  SOL ({solBalance.toFixed(4)})
+                </button>
               </div>
 
               <div style={{ textAlign: 'left' as const, marginBottom: 12 }}>
@@ -1322,21 +1415,19 @@ function PlayPageContent() {
                 />
               </div>
 
-              <div style={{ textAlign: 'left' as const, marginBottom: 16 }}>
+              <div style={{ textAlign: 'left' as const, marginBottom: 4 }}>
                 <div style={{ fontSize: 11, color: '#666', marginBottom: 4, fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
-                  <span>AMOUNT (USDC)</span>
-                  <span style={{ color: '#888' }}>Balance: ${usdcBalance.toFixed(2)}</span>
+                  <span>AMOUNT ({cashOutToken.toUpperCase()})</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input
                     type="number"
                     value={cashOutAmount}
                     onChange={e => setCashOutAmount(e.target.value)}
-                    placeholder="0.00"
+                    placeholder={cashOutToken === 'usdc' ? '0.00' : '0.0000'}
                     disabled={cashingOut}
-                    step="0.01"
+                    step={cashOutToken === 'usdc' ? '0.01' : '0.0001'}
                     min="0"
-                    max={usdcBalance}
                     style={{
                       flex: 1,
                       padding: '12px 14px',
@@ -1351,7 +1442,14 @@ function PlayPageContent() {
                     }}
                   />
                   <button
-                    onClick={() => setCashOutAmount(usdcBalance.toFixed(2))}
+                    onClick={() => {
+                      if (cashOutToken === 'usdc') {
+                        setCashOutAmount(usdcBalance.toFixed(2));
+                      } else {
+                        const maxSol = Math.max(0, solBalance - 0.005);
+                        setCashOutAmount(maxSol.toFixed(4));
+                      }
+                    }}
                     disabled={cashingOut}
                     style={{
                       padding: '12px 16px',
@@ -1362,25 +1460,38 @@ function PlayPageContent() {
                       fontSize: 12,
                       fontWeight: 700,
                       cursor: cashingOut ? 'default' : 'pointer',
+                      fontFamily: 'inherit',
                     }}
                   >
                     MAX
                   </button>
                 </div>
               </div>
+              <div style={{ fontSize: 9, color: '#444', textAlign: 'left' as const, marginBottom: 4 }}>
+                Available: {cashOutToken === 'usdc' ? `${usdcBalance.toFixed(2)} USDC` : `${solBalance.toFixed(4)} SOL`}
+                {cashOutToken === 'sol' && ' \u2022 0.005 SOL reserved for gas'}
+              </div>
+              {cashOutToken === 'sol' && cashOutAmount && Number(cashOutAmount) > 0 && (
+                <div style={{ fontSize: 9, color: '#555', textAlign: 'left' as const, marginBottom: 10 }}>
+                  \u2248 ${(Number(cashOutAmount) * solPrice).toFixed(2)} USD
+                </div>
+              )}
+              <div style={{ marginTop: cashOutToken === 'usdc' ? 12 : 4 }} />
 
               <button
                 onClick={handleCashOutSubmit}
-                disabled={cashingOut || !cashOutAddress || !cashOutAmount || Number(cashOutAmount) <= 0 || Number(cashOutAmount) > usdcBalance}
+                disabled={cashingOut || !cashOutAddress || !cashOutAmount || Number(cashOutAmount) <= 0 || (cashOutToken === 'usdc' ? Number(cashOutAmount) > usdcBalance : Number(cashOutAmount) > solBalance - 0.005)}
                 style={{
                   width: '100%',
                   padding: '14px 0',
                   borderRadius: 12,
                   border: 'none',
-                  background: cashingOut || !cashOutAddress || !cashOutAmount || Number(cashOutAmount) <= 0 || Number(cashOutAmount) > usdcBalance
+                  background: cashingOut || !cashOutAddress || !cashOutAmount || Number(cashOutAmount) <= 0
                     ? '#333'
-                    : 'linear-gradient(180deg, #AB47BC, #7B1FA2)',
-                  borderBottom: cashingOut ? 'none' : '4px solid #4A148C',
+                    : cashOutToken === 'usdc'
+                      ? 'linear-gradient(180deg, #AB47BC, #7B1FA2)'
+                      : 'linear-gradient(180deg, #9945FF, #7B2FD4)',
+                  borderBottom: cashingOut ? 'none' : cashOutToken === 'usdc' ? '4px solid #4A148C' : '4px solid #5C1BA3',
                   color: '#fff',
                   fontSize: 14,
                   fontWeight: 800,
@@ -1388,7 +1499,7 @@ function PlayPageContent() {
                   fontFamily: 'inherit',
                 }}
               >
-                {cashingOut ? 'Sending...' : `Withdraw ${cashOutAmount ? '$' + Number(cashOutAmount).toFixed(2) : ''} USDC`}
+                {cashingOut ? 'SENDING...' : `WITHDRAW ${cashOutToken.toUpperCase()}`}
               </button>
 
               <button
