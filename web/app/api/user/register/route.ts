@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
     }
     const privy = getPrivy();
     const supabase = getSupabase();
+    const body = await req.json().catch(() => ({}));
     const { user_id } = await privy.utils().auth().verifyAuthToken(authHeader.slice(7));
 
     const user = await privy.users()._get(user_id);
@@ -68,6 +69,24 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (error) throw error;
+
+    // Apply referral code for new players only
+    if (body.referralCode && newPlayer) {
+      try {
+        const { error: refError } = await supabase.rpc('apply_referral_code', {
+          p_code: body.referralCode,
+          p_wallet: walletAddress,
+        });
+        if (refError) {
+          console.error('[REGISTER] Referral apply error:', refError);
+        } else {
+          console.log('[REGISTER] Applied referral code:', body.referralCode, 'for wallet:', walletAddress);
+        }
+      } catch (refErr) {
+        console.error('[REGISTER] Referral apply failed (non-fatal):', refErr);
+      }
+    }
+
     return NextResponse.json({ player: newPlayer, isNew: true });
 
   } catch (error: any) {

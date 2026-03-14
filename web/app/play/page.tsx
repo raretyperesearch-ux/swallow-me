@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import * as Colyseus from "colyseus.js";
 import { joinRoom } from "../../lib/colyseus/client";
 import { usePrivy, getAccessToken } from "@privy-io/react-auth";
@@ -14,7 +15,7 @@ const SnakeGame = dynamic(() => import("../../components/SnakeGame"), {
 
 type GamePhase = "lobby" | "playing" | "dead" | "cashout" | "spectating";
 
-export default function PlayPage() {
+function PlayPageContent() {
   const [phase, setPhase] = useState<GamePhase>("lobby");
   const [room, setRoom] = useState<Colyseus.Room | null>(null);
   const [deathData, setDeathData] = useState<any>(null);
@@ -48,6 +49,21 @@ export default function PlayPage() {
   const [spectating, setSpectating] = useState(false);
   const [spectateInfo, setSpectateInfo] = useState<{ name: string; value: number } | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "error" | "info" | "success" } | null>(null);
+
+  // Referral code from URL
+  const searchParams = useSearchParams();
+  const refCode = searchParams.get("ref");
+  const [referralCode, setReferralCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (refCode) {
+      setReferralCode(refCode);
+      localStorage.setItem("sm_ref", refCode);
+    } else {
+      const stored = localStorage.getItem("sm_ref");
+      if (stored) setReferralCode(stored);
+    }
+  }, [refCode]);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initRetryRef = useRef(0);
 
@@ -92,6 +108,9 @@ export default function PlayPage() {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
+          body: JSON.stringify({
+            referralCode: referralCode || localStorage.getItem("sm_ref") || undefined,
+          }),
         });
         const data = await res.json();
 
@@ -110,6 +129,11 @@ export default function PlayPage() {
           setPlayerData(data.player);
           if (!data.player.username) {
             setShowUsernameModal(true);
+          }
+          // Clear referral code after successful new player registration
+          if (data.isNew && referralCode) {
+            localStorage.removeItem("sm_ref");
+            setReferralCode(null);
           }
           // Refresh balance on successful init
           handleRefreshBalance(true);
@@ -988,13 +1012,13 @@ export default function PlayPage() {
                 wordBreak: 'break-all' as const,
               }}>
                 {playerData?.referral_code
-                  ? `https://ibuy.money/?ref=${playerData.referral_code}`
+                  ? `https://swallowme.ibuy.money/play?ref=${playerData.referral_code}`
                   : 'Loading...'}
               </div>
               <button
                 onClick={() => {
                   if (playerData?.referral_code) {
-                    navigator.clipboard.writeText(`https://ibuy.money/?ref=${playerData.referral_code}`);
+                    navigator.clipboard.writeText(`https://swallowme.ibuy.money/play?ref=${playerData.referral_code}`);
                     setReferralCopied(true);
                     setTimeout(() => setReferralCopied(false), 2000);
                   }
@@ -1680,7 +1704,7 @@ export default function PlayPage() {
 
       <button
         onClick={() => {
-          const text = `I just got swallowed on Swallow Me! ${deathData?.kills || 0} kills before going down. Think you can survive longer? \u{1F40D}\u{1F480} swallowme.ibuy.money`;
+          const text = `I just got swallowed on Swallow Me! ${deathData?.kills || 0} kills before going down. Think you can survive longer? \u{1F40D}\u{1F480} ${playerData?.referral_code ? `swallowme.ibuy.money/play?ref=${playerData.referral_code}` : "swallowme.ibuy.money"}`;
           window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
         }}
         className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
@@ -1784,7 +1808,7 @@ export default function PlayPage() {
 
       <button
         onClick={() => {
-          const text = `Just cashed out $${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)} playing Swallow Me! Ate ${cashoutData?.kills || 0} snakes and walked away with real money \u{1F4B0}\u{1F40D} swallowme.ibuy.money`;
+          const text = `Just cashed out $${((cashoutData?.amount || 0) / 1_000_000).toFixed(2)} playing Swallow Me! Ate ${cashoutData?.kills || 0} snakes and walked away with real money \u{1F4B0}\u{1F40D} ${playerData?.referral_code ? `swallowme.ibuy.money/play?ref=${playerData.referral_code}` : "swallowme.ibuy.money"}`;
           window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
         }}
         className="bg-gray-700 hover:bg-gray-600 text-white font-bold px-8 py-3 rounded-lg"
@@ -1900,4 +1924,12 @@ export default function PlayPage() {
   }
 
   return null;
+}
+
+export default function PlayPage() {
+  return (
+    <Suspense fallback={null}>
+      <PlayPageContent />
+    </Suspense>
+  );
 }
