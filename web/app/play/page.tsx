@@ -283,7 +283,7 @@ function PlayPageContent() {
       tx.recentBlockhash = blockhash;
       tx.feePayer = playerPubkey;
 
-      const result = await sendTransaction({ transaction: tx, connection });
+      const result = await sendTransaction({ transaction: tx, connection, uiOptions: { showWalletUIs: false } });
       const signature = (result as any).signature || String(result);
       console.log("[CASHOUT] Withdrawal sent:", signature);
 
@@ -311,7 +311,9 @@ function PlayPageContent() {
       }).catch(() => {});
 
       const msg = err?.message || "";
-      if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
+      if (msg.includes("exited the modal") || msg.includes("User exited")) {
+        showToast("Please confirm the transaction when the popup appears", "info");
+      } else if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
         showToast("Withdrawal cancelled", "info");
       } else if (msg.includes("insufficient") || msg.includes("Insufficient")) {
         showToast("Insufficient SOL for transaction fees.", "error");
@@ -424,6 +426,7 @@ function PlayPageContent() {
           const result = await sendTransaction({
             transaction: tx,
             connection: connection,
+            uiOptions: { showWalletUIs: false },
           });
           signature = (result as any).signature || String(result);
           console.log('[JOIN] Success on attempt', attempt, signature);
@@ -434,8 +437,8 @@ function PlayPageContent() {
           const msg = txErr?.message || "";
           console.error(`[JOIN] Attempt ${attempt} failed:`, msg);
 
-          // Don't retry if user cancelled
-          if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
+          // Don't retry if user cancelled or dismissed modal
+          if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied") || msg.includes("exited the modal") || msg.includes("User exited")) {
             break;
           }
 
@@ -465,7 +468,9 @@ function PlayPageContent() {
         }).catch(() => {});
 
         const msg = lastTxError?.message || "";
-        if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
+        if (msg.includes("exited the modal") || msg.includes("User exited")) {
+          showToast("Please confirm the transaction when the popup appears", "info");
+        } else if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
           showToast("Transaction cancelled", "info");
         } else if (msg.includes("insufficient") || msg.includes("Insufficient")) {
           showToast("Insufficient balance. You need USDC and a small amount of SOL for fees.", "error");
