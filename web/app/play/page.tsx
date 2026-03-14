@@ -751,6 +751,35 @@ export default function PlayPage() {
         <button onClick={() => { if (!authenticated) { login(); return; } setShowReferralModal(true); }} style={{ width: "100%", maxWidth: 340, padding: "12px", borderRadius: 10, border: "1px solid rgba(255,105,180,0.15)", background: "rgba(255,105,180,0.05)", color: "#FF69B4", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           Manage Referral
         </button>
+
+        {/* Partner Logos Trust Section */}
+        <div style={{ width: "100%", maxWidth: 340, marginTop: 4 }}>
+          <div style={{ textAlign: "center" as const, fontSize: 9, color: "#444", letterSpacing: 3, marginBottom: 12 }}>
+            TRUSTED, SECURED &amp; POWERED BY
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+            {[
+              { src: "/logos/solana.png", name: "Solana", stat: "65B+ transactions" },
+              { src: "/logos/privy.png", name: "Privy", stat: "25M+ users secured" },
+              { src: "/logos/usdc.png", name: "USDC", stat: "$45B+ in circulation" },
+              { src: "/logos/moonpay.png", name: "MoonPay", stat: "20M+ users" },
+              { src: "/logos/coinbase.png", name: "Coinbase", stat: "100M+ users" },
+            ].map((p, i) => (
+              <div key={i} style={{
+                flex: 1, background: "#110a18",
+                border: "1px solid rgba(255,255,255,0.04)",
+                borderRadius: 10, padding: "10px 4px", textAlign: "center" as const,
+              }}>
+                <img src={p.src} alt={p.name} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{
+                  height: 20, marginBottom: 4,
+                  filter: "brightness(1.2)", opacity: 0.8,
+                }} />
+                <div style={{ fontSize: 8, fontWeight: 700, color: "#888" }}>{p.name}</div>
+                <div style={{ fontSize: 7, color: "#444", marginTop: 2 }}>{p.stat}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
 
@@ -1395,6 +1424,24 @@ export default function PlayPage() {
 
               <div style={{ fontSize: 9, color: "#333", lineHeight: 1.6 }}>
                 You need both USDC or SOL (to play) and a small amount of SOL (for fees)
+              </div>
+
+              {/* TRUSTED, SECURED & POWERED BY */}
+              <div style={{ borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: 10, marginTop: 12 }}>
+                <div style={{ fontSize: 7, color: "#444", letterSpacing: 2, marginBottom: 8, textAlign: "center" as const }}>
+                  🔒 TRUSTED, SECURED &amp; POWERED BY
+                </div>
+                <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 14, flexWrap: "wrap" as const }}>
+                  <img src="/logos/solana.png" alt="Solana" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{ height: 14, opacity: 0.7, filter: "brightness(1.2)" }} />
+                  <div style={{ width: 1, height: 10, background: "rgba(255,255,255,0.06)" }} />
+                  <img src="/logos/privy.png" alt="Privy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{ height: 14, opacity: 0.7, filter: "brightness(1.2)" }} />
+                  <div style={{ width: 1, height: 10, background: "rgba(255,255,255,0.06)" }} />
+                  <img src="/logos/usdc.png" alt="USDC" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{ height: 14, opacity: 0.7, filter: "brightness(1.2)" }} />
+                  <div style={{ width: 1, height: 10, background: "rgba(255,255,255,0.06)" }} />
+                  <img src="/logos/moonpay.png" alt="MoonPay" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{ height: 14, opacity: 0.7, filter: "brightness(1.2)" }} />
+                  <div style={{ width: 1, height: 10, background: "rgba(255,255,255,0.06)" }} />
+                  <img src="/logos/coinbase.png" alt="Coinbase" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{ height: 14, opacity: 0.7, filter: "brightness(1.2)" }} />
+                </div>
               </div>
 
               <button
