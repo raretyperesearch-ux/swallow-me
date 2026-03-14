@@ -293,8 +293,31 @@ function PlayPageContent() {
       setCashOutAmount("");
       setTimeout(() => handleRefreshBalance(true), 3000);
     } catch (err: any) {
-      console.error("[CASHOUT] Failed:", err);
-      showToast(err.message || "Withdrawal failed", "error");
+      const errorInfo = {
+        message: err?.message || "unknown",
+        code: err?.code || null,
+        name: err?.name || null,
+        stack: err?.stack?.substring(0, 500) || null,
+        wallet: walletAddress,
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+        timestamp: new Date().toISOString(),
+        action: "cashout",
+      };
+      console.error("[CASHOUT] Full error:", errorInfo);
+      fetch("/api/log-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(errorInfo),
+      }).catch(() => {});
+
+      const msg = err?.message || "";
+      if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
+        showToast("Withdrawal cancelled", "info");
+      } else if (msg.includes("insufficient") || msg.includes("Insufficient")) {
+        showToast("Insufficient SOL for transaction fees.", "error");
+      } else {
+        showToast(err.message || "Withdrawal failed", "error");
+      }
     } finally {
       setCashingOut(false);
     }
@@ -385,25 +408,74 @@ function PlayPageContent() {
       );
 
       const tx = new Transaction().add(transferIx);
-      const { blockhash } = await connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = blockhash;
       tx.feePayer = playerPubkey;
 
-      // DON'T wait for confirmation on client — go straight to server
-      // The server will verify the transaction via getParsedTransaction
-      // If Solana is slow, the server can retry verification
+      // Retry loop with fresh blockhash each attempt
+      const MAX_RETRIES = 3;
+      let lastTxError: any = null;
+      let signature: string = "";
 
-      let signature: string;
-      try {
-        const result = await sendTransaction({
-          transaction: tx,
-          connection: connection,
-        });
-        signature = (result as any).signature || String(result);
-        console.log('[JOIN] Transaction sent:', signature);
-      } catch (txErr: any) {
-        console.error('[JOIN] Transaction send failed:', txErr);
-        throw new Error('Transaction failed. Your funds were not sent.');
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          console.log(`[JOIN] Attempt ${attempt}/${MAX_RETRIES}`);
+          const { blockhash } = await connection.getLatestBlockhash("confirmed");
+          tx.recentBlockhash = blockhash;
+
+          const result = await sendTransaction({
+            transaction: tx,
+            connection: connection,
+          });
+          signature = (result as any).signature || String(result);
+          console.log('[JOIN] Success on attempt', attempt, signature);
+          lastTxError = null;
+          break;
+        } catch (txErr: any) {
+          lastTxError = txErr;
+          const msg = txErr?.message || "";
+          console.error(`[JOIN] Attempt ${attempt} failed:`, msg);
+
+          // Don't retry if user cancelled
+          if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
+            break;
+          }
+
+          if (attempt < MAX_RETRIES) {
+            showToast(`Retrying... (${attempt}/${MAX_RETRIES})`, "info");
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      if (lastTxError) {
+        const errorInfo = {
+          message: lastTxError?.message || "unknown",
+          code: lastTxError?.code || null,
+          name: lastTxError?.name || null,
+          stack: lastTxError?.stack?.substring(0, 500) || null,
+          wallet: walletAddress,
+          userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+          timestamp: new Date().toISOString(),
+          action: "join_game",
+        };
+        console.error("[JOIN] Full error:", errorInfo);
+        fetch("/api/log-error", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(errorInfo),
+        }).catch(() => {});
+
+        const msg = lastTxError?.message || "";
+        if (msg.includes("rejected") || msg.includes("cancelled") || msg.includes("denied")) {
+          showToast("Transaction cancelled", "info");
+        } else if (msg.includes("insufficient") || msg.includes("Insufficient")) {
+          showToast("Insufficient balance. You need USDC and a small amount of SOL for fees.", "error");
+        } else if (msg.includes("blockhash")) {
+          showToast("Network timeout. Please try again.", "error");
+        } else {
+          showToast("Transaction failed: " + (msg.length > 80 ? msg.substring(0, 80) + "..." : msg), "error");
+        }
+        setConnecting(false);
+        return;
       }
 
       // Small delay to let tx propagate, but don't block on full confirmation
@@ -455,7 +527,23 @@ function PlayPageContent() {
       setRoom(r);
       setPhase("playing");
     } catch (err: any) {
-      console.error("Failed to join:", err);
+      const errorInfo = {
+        message: err?.message || "unknown",
+        code: err?.code || null,
+        name: err?.name || null,
+        stack: err?.stack?.substring(0, 500) || null,
+        wallet: walletAddress,
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+        timestamp: new Date().toISOString(),
+        action: "join_game_outer",
+      };
+      console.error("[JOIN] Full error:", errorInfo);
+      fetch("/api/log-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(errorInfo),
+      }).catch(() => {});
+
       if (err.message?.includes("insufficient") || err.message?.includes("0x1")) {
         setShowFundsModal(true);
       } else {
