@@ -202,6 +202,12 @@ function PlayPageContent() {
     };
   }, []);
 
+  // Canonical signer: always derive from live wallets array, not stale state
+  const getSignerWallet = () => {
+    const w = wallets.find((w: any) => w.walletClientType === "privy");
+    return w || null;
+  };
+
   const handleCopyAddress = () => {
     if (!walletAddress) return;
     navigator.clipboard.writeText(walletAddress);
@@ -245,10 +251,15 @@ function PlayPageContent() {
       const { Connection, PublicKey, Transaction } = await import("@solana/web3.js");
       const { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction, getAccount } = await import("@solana/spl-token");
 
-      const wallet = wallets.find((w: any) => w.walletClientType === "privy");
-      if (!wallet) throw new Error("No embedded wallet found");
+      // Canonical signer — always from live wallets array
+      const embeddedWallet = getSignerWallet();
+      if (!embeddedWallet?.address) {
+        showToast("Wallet not ready", "error");
+        setCashingOut(false);
+        return;
+      }
 
-      const playerPubkey = new PublicKey(wallet.address);
+      const signerPubkey = new PublicKey(embeddedWallet.address);
       const connection = new Connection(
         process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
         "confirmed"
@@ -262,26 +273,49 @@ function PlayPageContent() {
         throw new Error("Invalid destination address");
       }
 
-      const sourceATA = await getAssociatedTokenAddress(USDC_MINT, playerPubkey);
+      const sourceATA = await getAssociatedTokenAddress(USDC_MINT, signerPubkey);
       const destATA = await getAssociatedTokenAddress(USDC_MINT, destPubkey);
 
       const amountMicro = Math.floor(amount * 1_000_000);
       const tx = new Transaction();
 
-      // Create destination ATA if it doesn't exist
+      // Create destination ATA if it doesn't exist — payer is signer
       try {
         await getAccount(connection, destATA);
       } catch {
         tx.add(
-          createAssociatedTokenAccountInstruction(playerPubkey, destATA, destPubkey, USDC_MINT)
+          createAssociatedTokenAccountInstruction(signerPubkey, destATA, destPubkey, USDC_MINT)
         );
       }
 
-      tx.add(createTransferInstruction(sourceATA, destATA, playerPubkey, amountMicro));
+      tx.add(createTransferInstruction(sourceATA, destATA, signerPubkey, amountMicro));
 
       const { blockhash } = await connection.getLatestBlockhash("confirmed");
       tx.recentBlockhash = blockhash;
-      tx.feePayer = playerPubkey;
+      tx.feePayer = signerPubkey;
+
+      // Preflight guard
+      const accountKeys = tx.compileMessage().accountKeys.map((k) => k.toBase58());
+      console.log('[TX DEBUG cashout] signer:', embeddedWallet.address, 'feePayer:', tx.feePayer?.toBase58?.(), 'keys:', accountKeys);
+
+      if (!accountKeys.includes(signerPubkey.toBase58())) {
+        console.error('[TX] cashout signer missing from account keys');
+        fetch("/api/log-error", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "cashout_preflight",
+            message: "Signer missing from tx account keys",
+            signer: signerPubkey.toBase58(),
+            stateWallet: walletAddress,
+            accountKeys,
+            timestamp: new Date().toISOString(),
+          }),
+        }).catch(() => {});
+        showToast("Wallet mismatch. Please reconnect and try again.", "error");
+        setCashingOut(false);
+        return;
+      }
 
       const result = await sendTransaction({ transaction: tx, connection, uiOptions: { showWalletUIs: false } });
       const signature = (result as any).signature || String(result);
@@ -299,6 +333,7 @@ function PlayPageContent() {
         name: err?.name || null,
         stack: err?.stack?.substring(0, 500) || null,
         wallet: walletAddress,
+        signerWallet: getSignerWallet()?.address || "none",
         userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
         timestamp: new Date().toISOString(),
         action: "cashout",
@@ -326,7 +361,10 @@ function PlayPageContent() {
   };
 
   const handleRefreshBalance = async (silent = false) => {
-    if (!walletAddress) return;
+    // Use canonical signer wallet, fall back to state
+    const signer = getSignerWallet();
+    const addr = signer?.address || walletAddress;
+    if (!addr) return;
     try {
       const { Connection, PublicKey } = await import("@solana/web3.js");
       const { getAssociatedTokenAddress } = await import("@solana/spl-token");
@@ -335,11 +373,16 @@ function PlayPageContent() {
         "confirmed"
       );
       const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-      const playerPubkey = new PublicKey(walletAddress);
+      const playerPubkey = new PublicKey(addr);
       const ata = await getAssociatedTokenAddress(USDC_MINT, playerPubkey);
       const tokenAccount = await connection.getTokenAccountBalance(ata).catch(() => null);
       const balance = tokenAccount ? Number(tokenAccount.value.uiAmount || 0) : 0;
       setUsdcBalance(balance);
+      // Keep walletAddress state in sync
+      if (signer?.address && signer.address !== walletAddress) {
+        console.log('[WALLET] Syncing stale walletAddress state:', walletAddress, '->', signer.address);
+        setWalletAddress(signer.address);
+      }
       if (!silent) showToast("Balance updated", "success");
     } catch (err) {
       console.error("[REFRESH] Failed:", err);
@@ -374,19 +417,29 @@ function PlayPageContent() {
       const { Connection, PublicKey, Transaction } = await import("@solana/web3.js");
       const { getAssociatedTokenAddress, createTransferInstruction } = await import("@solana/spl-token");
 
-      // Find the Privy embedded wallet
-      const wallet = wallets.find((w: any) => w.walletClientType === "privy");
-      if (!wallet) throw new Error("No embedded wallet found");
+      // Canonical signer — always from live wallets array
+      const embeddedWallet = getSignerWallet();
+      if (!embeddedWallet?.address) {
+        showToast("Wallet not ready. Please wait and try again.", "error");
+        setConnecting(false);
+        return;
+      }
 
-      const playerPubkey = new PublicKey(wallet.address);
+      const signerPubkey = new PublicKey(embeddedWallet.address);
       const connection = new Connection(
         process.env.NEXT_PUBLIC_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
         "confirmed"
       );
 
+      // Sync walletAddress state if stale
+      if (embeddedWallet.address !== walletAddress) {
+        console.log('[JOIN] Syncing stale walletAddress:', walletAddress, '->', embeddedWallet.address);
+        setWalletAddress(embeddedWallet.address);
+      }
+
       // Check SOL balance for gas fees
       try {
-        const solBalance = await connection.getBalance(playerPubkey);
+        const solBalance = await connection.getBalance(signerPubkey);
         const solAmount = solBalance / 1_000_000_000;
         console.log('[JOIN] SOL balance:', solAmount);
 
@@ -402,15 +455,15 @@ function PlayPageContent() {
       const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
       const TREASURY = new PublicKey("53Qy2ygocLjKWbtjgaepzHfZnf9oiZENJPWMnNUkSz8L");
 
-      const playerATA = await getAssociatedTokenAddress(USDC_MINT, playerPubkey);
+      const playerATA = await getAssociatedTokenAddress(USDC_MINT, signerPubkey);
       const treasuryATA = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
 
       const transferIx = createTransferInstruction(
-        playerATA, treasuryATA, playerPubkey, 1_000_000
+        playerATA, treasuryATA, signerPubkey, 1_000_000
       );
 
       const tx = new Transaction().add(transferIx);
-      tx.feePayer = playerPubkey;
+      tx.feePayer = signerPubkey;
 
       // Retry loop with fresh blockhash each attempt
       const MAX_RETRIES = 3;
@@ -422,6 +475,35 @@ function PlayPageContent() {
           console.log(`[JOIN] Attempt ${attempt}/${MAX_RETRIES}`);
           const { blockhash } = await connection.getLatestBlockhash("confirmed");
           tx.recentBlockhash = blockhash;
+
+          // Preflight guard: verify signer is in tx account keys
+          const accountKeys = tx.compileMessage().accountKeys.map((k) => k.toBase58());
+          console.log('[TX DEBUG] signer wallet:', embeddedWallet.address);
+          console.log('[TX DEBUG] state walletAddress:', walletAddress);
+          console.log('[TX DEBUG] feePayer:', tx.feePayer?.toBase58?.());
+          console.log('[TX DEBUG] accountKeys:', accountKeys);
+
+          if (!accountKeys.includes(signerPubkey.toBase58())) {
+            console.error('[TX] signer missing from account keys', {
+              signer: signerPubkey.toBase58(),
+              keys: accountKeys,
+            });
+            fetch("/api/log-error", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "join_game_preflight",
+                message: "Signer missing from tx account keys",
+                signer: signerPubkey.toBase58(),
+                stateWallet: walletAddress,
+                accountKeys,
+                timestamp: new Date().toISOString(),
+              }),
+            }).catch(() => {});
+            showToast("Wallet mismatch. Please reconnect and try again.", "error");
+            setConnecting(false);
+            return;
+          }
 
           const result = await sendTransaction({
             transaction: tx,
@@ -456,6 +538,7 @@ function PlayPageContent() {
           name: lastTxError?.name || null,
           stack: lastTxError?.stack?.substring(0, 500) || null,
           wallet: walletAddress,
+          signerWallet: embeddedWallet?.address || "none",
           userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
           timestamp: new Date().toISOString(),
           action: "join_game",
@@ -538,6 +621,7 @@ function PlayPageContent() {
         name: err?.name || null,
         stack: err?.stack?.substring(0, 500) || null,
         wallet: walletAddress,
+        signerWallet: getSignerWallet()?.address || "none",
         userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
         timestamp: new Date().toISOString(),
         action: "join_game_outer",
