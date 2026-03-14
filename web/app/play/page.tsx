@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import * as Colyseus from "colyseus.js";
 import { joinRoom } from "../../lib/colyseus/client";
 import { usePrivy, getAccessToken } from "@privy-io/react-auth";
-import { useSolanaWallets, useSendTransaction } from "@privy-io/react-auth/solana";
+import { useSolanaWallets, useSendTransaction, useFundWallet } from "@privy-io/react-auth/solana";
 
 // Dynamic import SnakeGame (no SSR — Canvas needs browser)
 const SnakeGame = dynamic(() => import("../../components/SnakeGame"), {
@@ -27,6 +27,7 @@ export default function PlayPage() {
   const { login, logout, authenticated, user, ready } = usePrivy();
   const { wallets, ready: walletsReady, createWallet } = useSolanaWallets();
   const { sendTransaction } = useSendTransaction();
+  const { fundWallet } = useFundWallet();
   const [playerData, setPlayerData] = useState<any>(null);
   const [usdcBalance, setUsdcBalance] = useState<number>(0);
   const [walletAddress, setWalletAddress] = useState<string>("");
@@ -1309,78 +1310,99 @@ export default function PlayPage() {
         {/* Add Funds Modal (from wallet card) */}
         {showAddFundsModal && (
           <div style={{
-            position: "fixed", inset: 0, zIndex: 9999,
-            background: "rgba(0,0,0,0.7)",
+            position: "fixed", inset: 0, zIndex: 99999,
+            background: "rgba(0,0,0,0.8)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            backdropFilter: "blur(4px)",
+            backdropFilter: "blur(6px)",
           }} onClick={() => setShowAddFundsModal(false)}>
             <div style={{
               background: "#110a18",
-              border: "1px solid rgba(255,105,180,0.15)",
+              border: "1px solid rgba(255,105,180,0.2)",
               borderRadius: 16,
-              padding: "32px 24px",
-              maxWidth: 380,
+              padding: "28px 24px",
+              maxWidth: 360,
               width: "90%",
               textAlign: "center" as const,
             }} onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
-                Add Funds
-              </div>
-              <div style={{ fontSize: 12, color: "#666", lineHeight: 1.6, marginBottom: 16 }}>
-                Send <span style={{ color: "#00E676", fontWeight: 700 }}>USDC</span> and a small amount of
-                <span style={{ color: "#BB86FC", fontWeight: 700 }}> SOL</span> (for fees) on Solana to this address:
-              </div>
-              <div style={{
-                background: "#0c0610",
-                border: "1px solid rgba(255,105,180,0.1)",
-                borderRadius: 10,
-                padding: "14px 16px",
-                fontSize: 11,
-                color: "#aaa",
-                wordBreak: "break-all" as const,
-                fontFamily: "monospace",
-                marginBottom: 12,
-                lineHeight: 1.6,
-              }}>
-                {walletAddress}
-              </div>
-              <div style={{ fontSize: 10, color: '#555', marginTop: -4, marginBottom: 12, lineHeight: 1.5 }}>
-                You need both USDC (to play) and SOL (for transaction fees).<br/>
-                Minimum: $1.00 USDC + 0.01 SOL (~$1.50 total)
-              </div>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>&#x1F4B3;</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: "#fff", marginBottom: 4 }}>Add Funds</div>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 20 }}>Choose how you want to fund your wallet</div>
+
               <button
-                onClick={() => {
-                  if (!walletAddress) return;
-                  navigator.clipboard.writeText(walletAddress);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
+                onClick={async () => {
+                  if (!walletAddress) { showToast("Wallet not ready", "error"); return; }
+                  try {
+                    setShowAddFundsModal(false);
+                    await fundWallet(walletAddress, { cluster: { name: "mainnet-beta" as any }, amount: "5" });
+                    setTimeout(() => handleRefreshBalance(), 5000);
+                  } catch (err: any) {
+                    console.error("[FUND] Error:", err);
+                  }
                 }}
                 style={{
-                  width: "100%",
-                  padding: "14px 0",
-                  borderRadius: 12,
-                  border: "none",
-                  background: "linear-gradient(180deg, #66BB6A, #43A047, #2E7D32)",
-                  borderBottom: "4px solid #1B5E20",
-                  color: "#fff",
-                  fontSize: 14,
-                  fontWeight: 800,
-                  cursor: "pointer",
-                  fontFamily: "inherit",
+                  width: "100%", padding: "14px 0", borderRadius: 12, border: "none",
+                  background: "linear-gradient(180deg, #FFB3D9, #FF69B4, #FF1493)",
+                  borderBottom: "4px solid #5C0030", color: "#fff", fontSize: 14,
+                  fontWeight: 800, cursor: "pointer", marginBottom: 8, fontFamily: "inherit",
                 }}
               >
-                {copied ? "\u2713 COPIED!" : "COPY ADDRESS"}
+                Buy with Card
               </button>
-              <div style={{ fontSize: 10, color: "#444", marginTop: 12, lineHeight: 1.5 }}>
-                Only send USDC on Solana. Other tokens or chains will be lost.
+              <div style={{ fontSize: 10, color: "#444", marginBottom: 16 }}>
+                Apple Pay, Google Pay, debit &amp; credit cards
               </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
+                <span style={{ fontSize: 10, color: "#444" }}>OR SEND CRYPTO</span>
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
+              </div>
+
+              <div style={{
+                background: "#0c0610", border: "1px solid rgba(255,105,180,0.1)",
+                borderRadius: 10, padding: "10px 14px", marginBottom: 8,
+                fontSize: 11, color: "#aaa", fontFamily: "monospace", wordBreak: "break-all" as const,
+              }}>
+                {walletAddress || "Loading..."}
+              </div>
+
+              <button
+                onClick={() => {
+                  if (walletAddress) {
+                    navigator.clipboard.writeText(walletAddress);
+                    showToast("Address copied!", "success");
+                  }
+                }}
+                style={{
+                  width: "100%", padding: "10px 0", borderRadius: 10,
+                  border: "1px solid rgba(255,105,180,0.15)", background: "transparent",
+                  color: "#FF69B4", fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 12, fontFamily: "inherit",
+                }}
+              >
+                Copy Wallet Address
+              </button>
+
+              <div style={{ textAlign: "left" as const, marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "#555", marginBottom: 8 }}>Send USDC or SOL on Solana from:</div>
+                <div style={{ fontSize: 11, color: "#777", lineHeight: 2 }}>
+                  <span style={{ color: "#00E676" }}>&#x25CF;</span> Cash App &mdash; send USDC<br/>
+                  <span style={{ color: "#0070BA" }}>&#x25CF;</span> PayPal &mdash; send SOL<br/>
+                  <span style={{ color: "#9B59B6" }}>&#x25CF;</span> Venmo &mdash; send SOL<br/>
+                  <span style={{ color: "#0052FF" }}>&#x25CF;</span> Coinbase &mdash; send USDC or SOL<br/>
+                  <span style={{ color: "#AB47BC" }}>&#x25CF;</span> Phantom &mdash; send USDC or SOL
+                </div>
+              </div>
+
+              <div style={{ fontSize: 9, color: "#333", lineHeight: 1.6 }}>
+                You need both USDC or SOL (to play) and a small amount of SOL (for fees)
+              </div>
+
               <button
                 onClick={() => setShowAddFundsModal(false)}
                 style={{
-                  width: "100%", padding: "10px 0", marginTop: 8,
-                  borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)",
-                  background: "transparent", color: "#555", fontSize: 12,
-                  cursor: "pointer", fontFamily: "inherit",
+                  width: "100%", padding: "8px 0", marginTop: 10, borderRadius: 8,
+                  border: "none", background: "transparent", color: "#444",
+                  fontSize: 11, cursor: "pointer", fontFamily: "inherit",
                 }}
               >
                 Close
