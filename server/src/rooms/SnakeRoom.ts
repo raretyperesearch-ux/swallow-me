@@ -130,6 +130,19 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     const wallet = options.wallet || "unknown";
     const name = options.name || `player_${client.sessionId.slice(0, 6)}`;
     const tierConfig = TIER_CONFIG[this.tier];
+    const isFreeRoom = this.roomName.endsWith("_free");
+
+    // Block guests from real money rooms
+    if (options.guest && !isFreeRoom) {
+      console.log(`[ROOM] Rejected guest from real money room ${this.roomName}`);
+      throw new Error("Free players must join the free room");
+    }
+
+    // Block real (non-spectator) players from free rooms
+    if (!options.guest && !options.spectate && isFreeRoom) {
+      console.log(`[ROOM] Rejected real player from free room ${this.roomName}`);
+      throw new Error("Paid players must join the real room");
+    }
 
     // Spectate mode — no snake, just camera following top player
     if (options.spectate) {

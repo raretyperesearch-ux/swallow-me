@@ -50,12 +50,15 @@ gameServer.define("snake_1", SnakeRoom, { tier: 1 });
 gameServer.define("snake_5", SnakeRoom, { tier: 5 });
 gameServer.define("snake_20", SnakeRoom, { tier: 20 });
 
+// Free/guest rooms — same SnakeRoom class, guests only
+gameServer.define("snake_1_free", SnakeRoom, { tier: 1 });
+
 console.log(`
   ╔═══════════════════════════════════════╗
   ║        🐍 SWALLOW ME SERVER 🐍        ║
   ║                                       ║
   ║  Port: ${port}                          ║
-  ║  Rooms: snake_1, snake_5, snake_20    ║
+  ║  Rooms: snake_1/5/20, snake_1_free    ║
   ║  Monitor: http://localhost:${port}/monitor ║
   ╚═══════════════════════════════════════╝
 `);
