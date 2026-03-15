@@ -245,10 +245,10 @@ export async function POST(req: NextRequest) {
       last_active_at: new Date().toISOString(),
     }).eq('id', player.id);
 
-    // 8b. Record referral earning from the 10% rake
+    // 8b. Record referral earning from the 15% rake
     if (outcome === 'cashout' && safeCashout > 0) {
       try {
-        const feeAmount = safeCashout / 1_000_000 / 0.9 - safeCashout / 1_000_000;
+        const feeAmount = safeCashout / 1_000_000 / 0.85 - safeCashout / 1_000_000;
         const { error: refError } = await supabase.rpc('record_referral_earning', {
           p_player_id: player.id,
           p_round_id: sessionId,

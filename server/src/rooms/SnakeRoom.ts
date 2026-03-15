@@ -483,13 +483,13 @@ export class SnakeRoom extends Room<SnakeRoomState> {
 
     snake.isSettling = true;
     const rawValue = Math.floor(snake.valueUsdc || 0);
-    const rake = Math.floor(rawValue * 0.10);
+    const rake = Math.floor(rawValue * 0.15);
     const cashoutMicro = rawValue - rake;
     const kills = snake.kills || 0;
     const duration = Date.now() - snake.spawnTime;
 
     console.log(
-      `[CASHOUT] Raw: ${rawValue}, Rake: ${rake} (10%), Payout: ${cashoutMicro}`
+      `[CASHOUT] Raw: ${rawValue}, Rake: ${rake} (15%), Payout: ${cashoutMicro}`
     );
 
     const result = await this.callSettle({

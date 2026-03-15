@@ -50,17 +50,17 @@ export const GAME_CONFIG = {
 export const TIER_CONFIG = {
   1: {
     entryAmount: 1_000_000, // 1 USDC (6 decimals)
-    rakeBps: 800, // 8%
+    rakeBps: 1500, // 15%
     maxPlayers: 100,
   },
   5: {
     entryAmount: 5_000_000, // 5 USDC
-    rakeBps: 800,
+    rakeBps: 1500,
     maxPlayers: 50,
   },
   20: {
     entryAmount: 20_000_000, // 20 USDC
-    rakeBps: 800,
+    rakeBps: 1500,
     maxPlayers: 25,
   },
 } as Record<number, { entryAmount: number; rakeBps: number; maxPlayers: number }>;

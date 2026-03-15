@@ -19,7 +19,7 @@ function getSupabase() {
 
 const TREASURY = '53Qy2ygocLjKWbtjgaepzHfZnf9oiZENJPWMnNUkSz8L';
 const ENTRY_MICRO = 1_000_000; // $1.00
-const RAKE_MICRO = 100_000;    // $0.10
+const RAKE_MICRO = 150_000;    // $0.15
 
 export async function POST(req: NextRequest) {
   try {
