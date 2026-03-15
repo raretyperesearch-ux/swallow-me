@@ -9,6 +9,34 @@ import { initBotState, removeBotState, getRandomBotName, getRandomBotType, getBo
 import { GAME_CONFIG, TIER_CONFIG } from "../config/gameConfig";
 import { v4 as uuidv4 } from "uuid";
 
+// Dynamic bot value tiers — scales with real (non-bot) player count
+function getBotValue(realPlayerCount: number): number {
+  if (realPlayerCount < 15) return 100000 + Math.floor(Math.random() * 150000);
+  if (realPlayerCount < 30) return 250000 + Math.floor(Math.random() * 200000);
+  if (realPlayerCount < 45) return 450000 + Math.floor(Math.random() * 200000);
+  if (realPlayerCount < 60) return 750000 + Math.floor(Math.random() * 200000);
+  if (realPlayerCount < 75) return 1000000 + Math.floor(Math.random() * 300000);
+  return 1500000;
+}
+
+function getBotTierFloor(realPlayerCount: number): number {
+  if (realPlayerCount < 15) return 100000;
+  if (realPlayerCount < 30) return 250000;
+  if (realPlayerCount < 45) return 450000;
+  if (realPlayerCount < 60) return 750000;
+  if (realPlayerCount < 75) return 1000000;
+  return 1500000;
+}
+
+function getTierName(realPlayerCount: number): string {
+  if (realPlayerCount < 15) return 'Tier 1 (1-14)';
+  if (realPlayerCount < 30) return 'Tier 2 (15-29)';
+  if (realPlayerCount < 45) return 'Tier 3 (30-44)';
+  if (realPlayerCount < 60) return 'Tier 4 (45-59)';
+  if (realPlayerCount < 75) return 'Tier 5 (60-74)';
+  return 'Tier 6 (75+)';
+}
+
 interface ClientViewport {
   x: number;
   y: number;
@@ -40,7 +68,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     const tierConfig = TIER_CONFIG[this.tier];
     if (!tierConfig) throw new Error(`Invalid tier: ${this.tier}`);
 
-    this.maxClients = tierConfig.maxPlayers;
+    this.maxClients = 50;
     this.setState(new SnakeRoomState());
     this.state.tier = this.tier;
     this.state.arenaRadius = GAME_CONFIG.ARENA_RADIUS;
@@ -210,6 +238,22 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       w: 1920,
       h: 1080,
     });
+
+    // Upgrade bot values if tier changed (only upgrade, never downgrade)
+    const realPlayers = this.countRealPlayers();
+    const tierFloor = getBotTierFloor(realPlayers);
+    let upgraded = 0;
+    for (const [, s] of this.serverSnakes) {
+      if (s.isBot && s.alive && s.valueUsdc < tierFloor) {
+        const newVal = getBotValue(realPlayers);
+        s.valueUsdc = newVal;
+        s.botStartValue = newVal;
+        upgraded++;
+      }
+    }
+    if (upgraded > 0) {
+      console.log(`[BOT-TIER] Player joined → ${getTierName(realPlayers)} (${realPlayers} players) — upgraded ${upgraded} bots`);
+    }
 
     this.updateCounts();
   }
@@ -596,22 +640,20 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
   }
 
-  private randomBotValue(): number {
-    const roll = Math.random();
-    if (roll < 0.70) {
-      // 70% chance: $0.10 - $0.15
-      return 100000 + Math.floor(Math.random() * 50000);
-    } else {
-      // 30% chance: $0.15 - $0.25
-      return 150000 + Math.floor(Math.random() * 100000);
+  private countRealPlayers(): number {
+    let count = 0;
+    for (const [, s] of this.serverSnakes) {
+      if (!s.isBot && s.alive) count++;
     }
+    return count;
   }
 
   private spawnBot() {
     const botId = `bot_${++this.botCounter}_${uuidv4().slice(0, 8)}`;
     const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
     const botType = getRandomBotType();
-    const botValue = this.randomBotValue();
+    const realPlayers = this.countRealPlayers();
+    const botValue = getBotValue(realPlayers);
 
     const bot = createSnake(
       botId,
@@ -625,6 +667,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     );
     bot.botType = botType;
     bot.botStartValue = botValue;
+    console.log(`[BOT-SPAWN] ${bot.name} spawned with $${(botValue / 1_000_000).toFixed(2)} — ${getTierName(realPlayers)} (${realPlayers} real players)`);
 
     this.serverSnakes.set(botId, bot);
     initBotState(botId, botType);
