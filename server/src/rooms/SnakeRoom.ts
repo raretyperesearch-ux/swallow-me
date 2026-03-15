@@ -5,7 +5,7 @@ import { ServerFood, spawnRandomFood, spawnDeathFood } from "../game/Food";
 import { runGameTick } from "../game/GameLoop";
 import { KillEvent } from "../game/Physics";
 import { findSafeSpawn } from "../game/Arena";
-import { initBotState, removeBotState, getRandomBotName } from "../game/BotAI";
+import { initBotState, removeBotState, getRandomBotName, getRandomBotType, getBotState } from "../game/BotAI";
 import { GAME_CONFIG, TIER_CONFIG } from "../config/gameConfig";
 import { v4 as uuidv4 } from "uuid";
 
@@ -24,6 +24,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
   private gameInterval!: ReturnType<typeof setInterval>;
   private syncInterval!: ReturnType<typeof setInterval>;
   private botCheckInterval!: ReturnType<typeof setInterval>;
+  private botCashoutInterval!: ReturnType<typeof setInterval>;
   private healthInterval!: ReturnType<typeof setInterval>;
   private tier: number = 1;
   private botCounter: number = 0;
@@ -66,6 +67,11 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     this.botCheckInterval = setInterval(() => {
       this.manageBots();
     }, 3000);
+
+    // Bot cashout check — ROI-based every 5 seconds
+    this.botCashoutInterval = setInterval(() => {
+      this.checkBotCashouts();
+    }, 5000);
 
     // Handle player input
     this.onMessage("input", (client, data: { angle: number; boost: boolean }) => {
@@ -248,6 +254,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     clearInterval(this.gameInterval);
     clearInterval(this.syncInterval);
     clearInterval(this.botCheckInterval);
+    clearInterval(this.botCashoutInterval);
     clearInterval(this.healthInterval);
 
     for (const [id, snake] of this.serverSnakes) {
@@ -589,10 +596,22 @@ export class SnakeRoom extends Room<SnakeRoomState> {
     }
   }
 
+  private randomBotValue(): number {
+    const roll = Math.random();
+    if (roll < 0.70) {
+      // 70% chance: $0.10 - $0.15
+      return 100000 + Math.floor(Math.random() * 50000);
+    } else {
+      // 30% chance: $0.15 - $0.25
+      return 150000 + Math.floor(Math.random() * 100000);
+    }
+  }
+
   private spawnBot() {
     const botId = `bot_${++this.botCounter}_${uuidv4().slice(0, 8)}`;
-    const tierConfig = TIER_CONFIG[this.tier];
     const spawn = findSafeSpawn(this.serverSnakes, GAME_CONFIG.ARENA_RADIUS);
+    const botType = getRandomBotType();
+    const botValue = this.randomBotValue();
 
     const bot = createSnake(
       botId,
@@ -600,13 +619,56 @@ export class SnakeRoom extends Room<SnakeRoomState> {
       "bot",
       spawn.x,
       spawn.y,
-      tierConfig.entryAmount,
+      botValue,
       true,
       1 + Math.floor(Math.random() * 9) // Skins 1-9, rainbow (0) reserved for player
     );
+    bot.botType = botType;
+    bot.botStartValue = botValue;
 
     this.serverSnakes.set(botId, bot);
-    initBotState(botId);
+    initBotState(botId, botType);
+  }
+
+  // ─── Bot Cashout (ROI-based) ────────────────────────────
+
+  private checkBotCashouts() {
+    for (const [botId, bot] of this.serverSnakes) {
+      if (!bot.isBot || !bot.alive) continue;
+
+      const startValue = bot.botStartValue || 100000;
+      const currentValue = bot.valueUsdc;
+      const roi = (currentValue - startValue) / startValue;
+
+      if (roi < 0.40) continue;
+
+      let cashoutChance = 0;
+      if (roi >= 0.40) cashoutChance = 0.15;
+      if (roi >= 0.75) cashoutChance = 0.30;
+      if (roi >= 1.00) cashoutChance = 0.50;
+      if (roi >= 1.50) cashoutChance = 0.70;
+      if (roi >= 2.00) cashoutChance = 0.90;
+      if (roi >= 3.00) cashoutChance = 1.00;
+
+      const killBonus = (bot.kills || 0) * 0.10;
+      cashoutChance = Math.min(1.0, cashoutChance + killBonus);
+
+      if (Math.random() < cashoutChance) {
+        console.log(
+          `[BOT] ${bot.name} cashed out at $${(currentValue / 1_000_000).toFixed(2)} (${(roi * 100).toFixed(0)}% ROI, ${bot.kills || 0} kills)`
+        );
+
+        bot.alive = false;
+        this.serverSnakes.delete(botId);
+        if (this.state.snakes.has(botId)) {
+          this.state.snakes.delete(botId);
+        }
+        removeBotState(botId);
+
+        // Spawn fresh replacement
+        this.spawnBot();
+      }
+    }
   }
 
   // ─── Interest Management Helpers ────────────────────────
@@ -660,6 +722,7 @@ export class SnakeRoom extends Room<SnakeRoomState> {
         stateSnake.id = id;
         stateSnake.name = snake.name;
         stateSnake.isBot = snake.isBot;
+        stateSnake.botType = snake.botType || "";
         stateSnake.skinId = snake.skinId;
         this.state.snakes.set(id, stateSnake);
       }

@@ -21,6 +21,7 @@ export interface ServerSnake {
   segments: SnakeSegmentData[];
   alive: boolean;
   isBot: boolean;
+  botType: string; // "hunter" | "patrol" | "coward" | ""
   valueUsdc: number; // USDC lamports
   kills: number;
   skinId: number;
@@ -30,6 +31,7 @@ export interface ServerSnake {
   sessionId?: string;   // sm_sessions.id from /api/game/enter
   playerId?: string;    // bm_players.id from /api/game/enter
   isSettling?: boolean;  // lock during settlement
+  botStartValue?: number; // bot's initial value for ROI calculation
 }
 
 export function createSnake(
@@ -69,6 +71,7 @@ export function createSnake(
     segments,
     alive: true,
     isBot,
+    botType: "",
     valueUsdc,
     kills: 0,
     skinId,

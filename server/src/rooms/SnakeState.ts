@@ -11,6 +11,7 @@ export class SnakeEntity extends Schema {
   @type("uint16") length: number = 10;
   @type("uint8") skinId: number = 0;
   @type("boolean") isBot: boolean = false;
+  @type("string") botType: string = "";
   @type("boolean") alive: boolean = true;
   @type("uint16") kills: number = 0;
   @type("float64") valueUsdc: number = 0;
