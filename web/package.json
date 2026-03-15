@@ -11,7 +11,7 @@
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.0",
     "@privy-io/node": "^0.10.1",
-    "@privy-io/react-auth": "2.25.0",
+    "@privy-io/react-auth": "^3.17.0",
     "@privy-io/wagmi": "^1.0.0",
     "@solana-program/system": "^0.12.0",
     "@solana-program/token": "^0.12.0",

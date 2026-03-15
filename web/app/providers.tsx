@@ -23,13 +23,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           },
           waitForTransactionConfirmation: false,
         } as any,
-        solanaClusters: [
-          {
-            name: 'mainnet-beta',
-            rpcUrl: process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-          },
-        ],
-      }}
+      } as any}
     >
       {children}
     </PrivyProvider>

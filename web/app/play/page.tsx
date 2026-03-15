@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import * as Colyseus from "colyseus.js";
 import { joinRoom } from "../../lib/colyseus/client";
 import { usePrivy, getAccessToken } from "@privy-io/react-auth";
-import { useSolanaWallets, useSendTransaction, useFundWallet } from "@privy-io/react-auth/solana";
+import { useWallets as useSolanaWallets, useCreateWallet, useSignAndSendTransaction, useFundWallet } from "@privy-io/react-auth/solana";
 
 // Dynamic import SnakeGame (no SSR — Canvas needs browser)
 const SnakeGame = dynamic(() => import("../../components/SnakeGame"), {
@@ -26,8 +26,9 @@ function PlayPageContent() {
 
   // Privy auth
   const { login, logout, authenticated, user, ready } = usePrivy();
-  const { wallets, ready: walletsReady, createWallet } = useSolanaWallets();
-  const { sendTransaction } = useSendTransaction();
+  const { wallets, ready: walletsReady } = useSolanaWallets();
+  const { createWallet } = useCreateWallet();
+  const { signAndSendTransaction } = useSignAndSendTransaction();
   const { fundWallet } = useFundWallet();
   const [playerData, setPlayerData] = useState<any>(null);
   const [usdcBalance, setUsdcBalance] = useState<number>(0);
@@ -139,6 +140,15 @@ function PlayPageContent() {
             localStorage.removeItem("sm_ref");
             setReferralCode(null);
           }
+          // Wallet sync: if DB wallet differs from active Privy wallet, update DB
+          if (data.player.wallet_address && walletAddress && data.player.wallet_address !== walletAddress) {
+            console.log('[WALLET SYNC]', data.player.wallet_address, '->', walletAddress);
+            fetch('/api/sync-wallet', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ newWallet: walletAddress }),
+            }).catch((e) => console.error('[WALLET SYNC] failed:', e));
+          }
           // Refresh balance on successful init
           handleRefreshBalance(true);
         }
@@ -170,19 +180,19 @@ function PlayPageContent() {
   useEffect(() => {
     if (!ready || !authenticated || !walletsReady) return;
 
-    const privyWallet = wallets.find((w: any) => w.walletClientType === "privy");
+    const privyWallet = getSignerWallet();
 
     if (!privyWallet && createWallet) {
       // No Solana wallet exists — create one explicitly
       console.log('[WALLET] No Solana wallet found, creating one...');
       createWallet()
-        .then((wallet: any) => {
-          console.log('[WALLET] Solana wallet created:', wallet.address);
-          setWalletAddress(wallet.address);
+        .then((result: any) => {
+          const addr = result?.wallet?.address || result?.address;
+          console.log('[WALLET] Solana wallet created:', addr);
+          if (addr) setWalletAddress(addr);
         })
         .catch((err: any) => {
           console.error('[WALLET] Failed to create Solana wallet:', err);
-          // If it fails because one already exists, that's fine
           if (err.message?.includes('already')) {
             console.log('[WALLET] Wallet already exists, will pick up on next render');
           }
@@ -208,8 +218,28 @@ function PlayPageContent() {
 
   // Canonical signer: always derive from live wallets array, not stale state
   const getSignerWallet = () => {
-    const w = wallets.find((w: any) => w.walletClientType === "privy");
-    return w || null;
+    return (
+      wallets.find((w: any) => w?.walletClientType === 'privy') ||
+      wallets.find((w: any) => w?.connectorType === 'embedded') ||
+      wallets.find((w: any) => w?.standardWallet?.name === 'Privy') ||
+      wallets[0] || null
+    );
+  };
+
+  // Pre-sign guard: verify wallet pubkey is a required signer
+  const assertWalletCanSign = (tx: any, walletAddress: string) => {
+    try {
+      const msg = tx.compileMessage();
+      const required = msg.accountKeys.map((k: any) => k.toBase58());
+      if (!required.includes(walletAddress)) {
+        throw new Error(
+          `[SIGNER_MISMATCH] wallet ${walletAddress} not in required signers: ${required.join(', ')}`
+        );
+      }
+    } catch (e: any) {
+      if (e.message?.includes('SIGNER_MISMATCH')) throw e;
+      // compileMessage may fail if blockhash not set yet — skip guard
+    }
   };
 
   const handleCopyAddress = () => {
@@ -313,30 +343,17 @@ function PlayPageContent() {
       tx.feePayer = signerPubkey;
 
       // Preflight guard
-      const accountKeys = tx.compileMessage().accountKeys.map((k) => k.toBase58());
-      console.log('[TX DEBUG cashout] token:', cashOutToken, 'signer:', embeddedWallet.address, 'feePayer:', tx.feePayer?.toBase58?.(), 'keys:', accountKeys);
+      assertWalletCanSign(tx, signerPubkey.toBase58());
+      console.log('[TX DEBUG cashout] token:', cashOutToken, 'wallet:', embeddedWallet.address, 'feePayer:', tx.feePayer?.toBase58?.());
 
-      if (!accountKeys.includes(signerPubkey.toBase58())) {
-        console.error('[TX] cashout signer missing from account keys');
-        fetch("/api/log-error", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "cashout_preflight",
-            message: "Signer missing from tx account keys",
-            signer: signerPubkey.toBase58(),
-            stateWallet: walletAddress,
-            accountKeys,
-            timestamp: new Date().toISOString(),
-          }),
-        }).catch(() => {});
-        showToast("Wallet mismatch. Please reconnect and try again.", "error");
-        setCashingOut(false);
-        return;
-      }
-
-      const result = await sendTransaction({ transaction: tx, connection, uiOptions: { showWalletUIs: false } });
-      const signature = (result as any).signature || String(result);
+      const serializedTx = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+      const result = await signAndSendTransaction({
+        transaction: serializedTx,
+        wallet: embeddedWallet,
+        options: { uiOptions: { showWalletUIs: false } },
+      });
+      const bs58 = (await import("bs58")).default;
+      const signature = bs58.encode(Buffer.from(result.signature));
       console.log("[CASHOUT] Withdrawal sent:", signature);
 
       const tokenName = cashOutToken === "usdc" ? "USDC" : "SOL";
@@ -570,40 +587,17 @@ function PlayPageContent() {
           tx.recentBlockhash = blockhash;
 
           // Preflight guard: verify signer is in tx account keys
-          const accountKeys = tx.compileMessage().accountKeys.map((k) => k.toBase58());
-          console.log('[TX DEBUG] signer wallet:', embeddedWallet.address);
-          console.log('[TX DEBUG] state walletAddress:', walletAddress);
-          console.log('[TX DEBUG] feePayer:', tx.feePayer?.toBase58?.());
-          console.log('[TX DEBUG] accountKeys:', accountKeys);
+          console.log('[TX DEBUG] wallet:', embeddedWallet.address, 'feePayer:', tx.feePayer?.toBase58?.());
+          assertWalletCanSign(tx, signerPubkey.toBase58());
 
-          if (!accountKeys.includes(signerPubkey.toBase58())) {
-            console.error('[TX] signer missing from account keys', {
-              signer: signerPubkey.toBase58(),
-              keys: accountKeys,
-            });
-            fetch("/api/log-error", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                action: "join_game_preflight",
-                message: "Signer missing from tx account keys",
-                signer: signerPubkey.toBase58(),
-                stateWallet: walletAddress,
-                accountKeys,
-                timestamp: new Date().toISOString(),
-              }),
-            }).catch(() => {});
-            showToast("Wallet mismatch. Please reconnect and try again.", "error");
-            setConnecting(false);
-            return;
-          }
-
-          const result = await sendTransaction({
-            transaction: tx,
-            connection: connection,
-            uiOptions: { showWalletUIs: false },
+          const serializedTx = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+          const sendResult = await signAndSendTransaction({
+            transaction: serializedTx,
+            wallet: embeddedWallet,
+            options: { uiOptions: { showWalletUIs: false } },
           });
-          signature = (result as any).signature || String(result);
+          const bs58 = (await import("bs58")).default;
+          signature = bs58.encode(Buffer.from(sendResult.signature));
           console.log('[JOIN] Success on attempt', attempt, signature);
           lastTxError = null;
           break;
@@ -1732,7 +1726,7 @@ function PlayPageContent() {
                   if (!walletAddress) { showToast("Wallet not ready", "error"); return; }
                   try {
                     setShowAddFundsModal(false);
-                    await fundWallet(walletAddress, { cluster: { name: "mainnet-beta" as any }, amount: "5" });
+                    await fundWallet({ address: walletAddress, options: { chain: "solana:mainnet" as any, amount: "5" } });
                     setTimeout(() => handleRefreshBalance(), 5000);
                   } catch (err: any) {
                     console.error("[FUND] Error:", err);
@@ -2272,10 +2266,12 @@ function PlayPageContent() {
   return null;
 }
 
+const PlayPageDynamic = dynamic(() => Promise.resolve(PlayPageContent), { ssr: false });
+
 export default function PlayPage() {
   return (
     <Suspense fallback={null}>
-      <PlayPageContent />
+      <PlayPageDynamic />
     </Suspense>
   );
 }
