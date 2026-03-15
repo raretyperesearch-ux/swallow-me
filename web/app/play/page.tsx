@@ -908,12 +908,17 @@ function PlayPageContent() {
             <span style={{ background: "#00E676", color: "#000", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 8, animation: "pulse 2s infinite" }}>Live</span>
           </div>
           {[
-            { rank: 1, name: "venom_king", amount: "$42.50" },
-            { rank: 2, name: "snek_lord", amount: "$28.00" },
-            { rank: 3, name: "coil_master", amount: "$15.75" },
+            { rank: 1, name: "EMINEM", amount: "$199.79" },
+            { rank: 2, name: "godblessed4200", amount: "$157.28" },
+            { rank: 3, name: "Chadlingoo", amount: "$141.27" },
+            { rank: 4, name: "caca", amount: "$137.21" },
+            { rank: 5, name: "KINGdr4koM", amount: "$126.61" },
+            { rank: 6, name: "iismaaus", amount: "$47.16" },
+            { rank: 7, name: "lockwood", amount: "$38.42" },
+            { rank: 8, name: "Tommywhite", amount: "$37.32" },
           ].map((row) => (
             <div key={row.rank} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-              <span style={{ width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, background: row.rank === 1 ? "linear-gradient(135deg, #FFD740, #FF8F00)" : row.rank === 2 ? "linear-gradient(135deg, #B0BEC5, #78909C)" : "linear-gradient(135deg, #A1887F, #795548)", color: "#000" }}>{row.rank}</span>
+              <span style={{ width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, background: row.rank === 1 ? "linear-gradient(135deg, #FFD740, #FF8F00)" : row.rank === 2 ? "linear-gradient(135deg, #B0BEC5, #78909C)" : row.rank === 3 ? "linear-gradient(135deg, #A1887F, #795548)" : "rgba(255,255,255,0.08)", color: row.rank <= 3 ? "#000" : "#888" }}>{row.rank}</span>
               <span style={{ flex: 1, fontSize: 13, color: "#ccc" }}>{row.name}</span>
               <span style={{ fontSize: 13, fontWeight: 600, color: "#00E676" }}>{row.amount}</span>
             </div>
@@ -1052,19 +1057,37 @@ function PlayPageContent() {
         {/* Stats Row */}
         <div style={{ display: "flex", gap: 16, width: "100%", maxWidth: 340 }}>
           <div style={{ ...cardStyle, flex: 1, textAlign: "center" as const, padding: 14 }}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: "#00E676" }}>12</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#00E676" }}>14</div>
             <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>Players In Game</div>
           </div>
           <div style={{ ...cardStyle, flex: 1, textAlign: "center" as const, padding: 14 }}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: "#00E676" }}>$1,247</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#00E676" }}>$8,042</div>
             <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>Global Winnings</div>
           </div>
         </div>
 
-        {/* Manage Referral */}
-        <button onClick={() => { if (!authenticated) { login(); return; } setShowReferralModal(true); }} style={{ width: "100%", maxWidth: 340, padding: "12px", borderRadius: 10, border: "1px solid rgba(255,105,180,0.15)", background: "rgba(255,105,180,0.05)", color: "#FF69B4", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          Manage Referral
-        </button>
+        {/* Refer a Friend */}
+        <div style={{ padding: '0', marginBottom: 10, position: 'relative', width: '100%', maxWidth: 340 }}>
+          <div style={{
+            position: 'absolute',
+            top: -8,
+            right: 24,
+            background: 'linear-gradient(135deg, #FFD700, #FFA500)',
+            color: '#1a1a2e',
+            fontSize: 9,
+            fontWeight: 900,
+            padding: '3px 10px',
+            borderRadius: 6,
+            zIndex: 2,
+            boxShadow: '0 2px 8px rgba(255,215,0,0.3)',
+            letterSpacing: 0.5,
+          }}>
+            ⭐ UP TO 30% FEES
+          </div>
+          <button onClick={() => { if (!authenticated) { login(); return; } setShowReferralModal(true); }} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "1px solid rgba(255,105,180,0.15)", background: "rgba(255,105,180,0.05)", color: "#FF69B4", fontSize: 13, fontWeight: 600, cursor: "pointer", position: 'relative' }}>
+            Refer a Friend 💰
+          </button>
+        </div>
 
         {/* Partner Logos Trust Section */}
         <div style={{ width: "100%", maxWidth: 340, marginTop: 4 }}>
@@ -1073,23 +1096,24 @@ function PlayPageContent() {
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
             {[
-              { src: "/logos/solana.png", name: "Solana", stat: "65B+ transactions" },
-              { src: "/logos/privy.png", name: "Privy", stat: "25M+ users secured" },
-              { src: "/logos/usdc.png", name: "USDC", stat: "$45B+ in circulation" },
-              { src: "/logos/moonpay.png", name: "MoonPay", stat: "20M+ users" },
-              { src: "/logos/coinbase.png", name: "Coinbase", stat: "100M+ users" },
+              { src: "/logos/solana.png", name: "Solana", stat: "65B+ transactions", showName: true },
+              { src: "/logos/privy.png", name: "Privy", stat: "25M+ users secured", showName: true },
+              { src: "/logos/usdc.png", name: "Circle", stat: "$45B+ in circulation", showName: false },
+              { src: "/logos/moonpay.png", name: "MoonPay", stat: "20M+ users", showName: false },
+              { src: "/logos/coinbase.png", name: "Coinbase", stat: "100M+ users", showName: false },
             ].map((p, i) => (
               <div key={i} style={{
-                flex: 1, background: "#110a18",
+                flex: 1, height: 80, background: "#110a18",
                 border: "1px solid rgba(255,255,255,0.04)",
-                borderRadius: 10, padding: "10px 4px", textAlign: "center" as const,
+                borderRadius: 10, padding: "8px 4px",
+                display: "flex", flexDirection: "column" as const, alignItems: "center", justifyContent: "center", gap: 6,
               }}>
                 <img src={p.src} alt={p.name} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} style={{
-                  height: 20, marginBottom: 4,
+                  maxHeight: 24, maxWidth: 70, objectFit: "contain" as const,
                   filter: "brightness(1.2)", opacity: 0.8,
                 }} />
-                <div style={{ fontSize: 8, fontWeight: 700, color: "#888" }}>{p.name}</div>
-                <div style={{ fontSize: 7, color: "#444", marginTop: 2 }}>{p.stat}</div>
+                {p.showName && <div style={{ fontSize: 9, fontWeight: 700, color: "#888" }}>{p.name}</div>}
+                <div style={{ fontSize: 7, color: "#444" }}>{p.stat}</div>
               </div>
             ))}
           </div>
