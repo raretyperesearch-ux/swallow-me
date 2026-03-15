@@ -61,7 +61,7 @@ export const TIER_CONFIG = {
   20: {
     entryAmount: 20_000_000, // 20 USDC
     rakeBps: 1500,
-    maxPlayers: 25,
+    maxPlayers: 50,
   },
 } as Record<number, { entryAmount: number; rakeBps: number; maxPlayers: number }>;
 
